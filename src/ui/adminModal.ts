@@ -1,4 +1,6 @@
 import { Station } from '../types';
+import { AppConfigService } from '../services/appConfigService';
+import { DEFAULT_APP_CONFIG, UserIconsVisibility } from '../config/appConfig';
 import { StationStorage } from '../services/stationStorage';
 import {
   ColumnMappingOverride,
@@ -49,7 +51,7 @@ const createEmptyAddDraft = (): AddStationDraft => ({
 export class AdminModalComponent {
   private container: HTMLElement;
   private isAuthenticated = false;
-  private currentTab: 'upload' | 'manage' | 'add' | 'branding' | 'source' = 'upload';
+  private currentTab: 'upload' | 'manage' | 'add' | 'branding' | 'settings' | 'source' = 'upload';
   private stations: Station[] = [];
   private onDataChangedCallback: (focusedStation?: Station) => void;
   private onLocateStationCallback?: (station: Station) => void;
@@ -77,7 +79,7 @@ export class AdminModalComponent {
     this.onPickCoordsOnMapCallback = handlers.onPickCoordsOnMap;
   }
 
-  show(preferredTab?: 'upload' | 'manage' | 'add' | 'branding' | 'source'): void {
+  show(preferredTab?: 'upload' | 'manage' | 'add' | 'branding' | 'settings' | 'source'): void {
     this.stations = StationStorage.getStations();
     if (preferredTab) {
       this.currentTab = preferredTab;
@@ -126,8 +128,8 @@ export class AdminModalComponent {
               <input 
                 type="password" 
                 id="admin-password-input" 
-                placeholder="كلمة المرور (0000)" 
-                maxlength="8"
+                placeholder="أدخل كلمة المرور" 
+                maxlength="32"
                 autocomplete="off"
                 class="w-full text-center tracking-widest text-xl font-bold bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-2xl py-3 text-white outline-none font-sans"
               />
@@ -164,7 +166,8 @@ export class AdminModalComponent {
     form?.addEventListener('submit', (e) => {
       e.preventDefault();
       const val = input.value.trim();
-      if (val === '0000') {
+      const currentPassword = AppConfigService.getConfig().adminPassword;
+      if (val === currentPassword) {
         this.isAuthenticated = true;
         SoundService.playChime('start');
         this.renderDashboard();
@@ -208,11 +211,11 @@ export class AdminModalComponent {
                     لوحة تحكم مدير النظام
                   </h3>
                   <span class="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold px-2 py-0.5 rounded-full">
-                    مفعلة (0000)
+                    مفعلة
                   </span>
                 </div>
                 <p class="text-xs text-slate-400">
-                  إدارة المحطات • رفع إكسيل • التحكم بالأنشطة والشعار • تصدير الكود المصدري
+                  إدارة المحطات • الاسم وكلمة المرور وأيقونات المستخدم • الشعار • اعتماد الكود لـ Vercel
                 </p>
               </div>
             </div>
@@ -247,9 +250,13 @@ export class AdminModalComponent {
               <span>🎨</span>
               <span>الشعار والمظهر</span>
             </button>
+            <button data-tab="settings" class="admin-tab ${this.currentTab === 'settings' ? 'active' : ''} px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 shrink-0">
+              <span>⚙️</span>
+              <span>الاسم وكلمة السر والأيقونات</span>
+            </button>
             <button data-tab="source" class="admin-tab ${this.currentTab === 'source' ? 'active' : ''} px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 shrink-0">
               <span>💾</span>
-              <span>الكود المصدري وتصدير GitHub/Vercel</span>
+              <span>تثبيت الكود و Vercel</span>
             </button>
           </div>
 
@@ -275,6 +282,8 @@ export class AdminModalComponent {
         return this.renderAddTab();
       case 'branding':
         return this.renderBrandingTab();
+      case 'settings':
+        return this.renderSettingsTab();
       case 'source':
         return this.renderSourceCodeTab();
     }
@@ -1172,20 +1181,186 @@ export class AdminModalComponent {
     `;
   }
 
-  // Tab 5: Source Code & GitHub / Vercel Export
+  // Tab 5: App Name, Admin Password, User Icons Visibility & Street Map Lock
+  private renderSettingsTab(): string {
+    const cfg = AppConfigService.getConfig();
+    const icons = cfg.userIcons;
+
+    const headerToggles: Array<{ key: keyof UserIconsVisibility; icon: string; label: string; desc: string }> = [
+      { key: 'nearestStation', icon: '🧭', label: 'زر أقرب محطة', desc: 'الزر الأخضر السريع لتحديد أقرب محطة' },
+      { key: 'offlineMap', icon: '🗺️', label: 'زر خريطة أوفلاين', desc: 'تحميل خريطة مصر للعمل بدون إنترنت' },
+      { key: 'installPwa', icon: '📲', label: 'زر تثبيت التطبيق', desc: 'تثبيت التطبيق على شاشة الهاتف' },
+      { key: 'stationsList', icon: '📋', label: 'زر قائمة المحطات (الشريط العلوي)', desc: 'فتح دليل وجدول المحطات الكامل' },
+      { key: 'themeToggle', icon: '🌓', label: 'زر مظهر الواجهة (الليلي/النهاري)', desc: 'تبديل ألوان القوائم والشريط فقط (دون الخريطة)' },
+      { key: 'networkBadge', icon: '📶', label: 'شارة حالة الاتصال (متصل/أوفلاين)', desc: 'إظهار مؤشر الاتصال بجانب الاسم' },
+    ];
+
+    const mapToggles: Array<{ key: keyof UserIconsVisibility; icon: string; label: string; desc: string }> = [
+      { key: 'locationBadge', icon: '📍', label: 'شارة موقعي الحالي', desc: 'الزر التفاعلي أعلى الخريطة لتحديد الموقع' },
+      { key: 'mapSearch', icon: '🔍', label: 'شريط البحث وفلاتر الخدمات', desc: 'البحث داخل الخريطة وفلاتر الأنشطة' },
+      { key: 'recenterGps', icon: '🎯', label: 'زر توسيط موقعي (GPS)', desc: 'الزر العائم لتوسيط الخريطة على موقع المستخدم' },
+      { key: 'zoomControls', icon: '➕', label: 'أزرار التكبير والتصغير (+ / -)', desc: 'التحكم بمستوى تقريب الخريطة' },
+      { key: 'fitAllStations', icon: '🌍', label: 'زر عرض كافة محطات الجمهورية', desc: 'ضبط الخريطة لإظهار جميع المحطات' },
+      { key: 'quickList', icon: '📑', label: 'زر قائمة المحطات العائم', desc: 'اختصار فتح القائمة أسفل يسار الخريطة' },
+    ];
+
+    const renderToggleCard = (item: { key: keyof UserIconsVisibility; icon: string; label: string; desc: string }) => {
+      const checked = icons[item.key];
+      return `
+        <label class="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-900/70 border ${checked ? 'border-emerald-500/40' : 'border-white/10 opacity-75'} hover:border-emerald-400/60 cursor-pointer transition-all">
+          <div class="flex items-start gap-2.5 text-right">
+            <span class="text-lg leading-none mt-0.5">${item.icon}</span>
+            <div>
+              <div class="text-xs font-bold text-white">${item.label}</div>
+              <div class="text-[10px] text-slate-400 mt-0.5">${item.desc}</div>
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            data-icon-key="${item.key}"
+            class="cfg-icon-checkbox w-4 h-4 accent-emerald-500 rounded cursor-pointer shrink-0"
+            ${checked ? 'checked' : ''}
+          />
+        </label>
+      `;
+    };
+
+    return `
+      <form id="app-settings-form" class="space-y-5 max-w-3xl mx-auto text-right">
+        <div>
+          <h4 class="text-base font-bold text-white mb-1">
+            التحكم في اسم التطبيق وكلمة السر وأيقونات صفحة المستخدم
+          </h4>
+          <p class="text-xs text-slate-400">
+            كافة التعديلات هنا تُطبق فوراً وتُثبت مباشرة في الكود المصدري (<code>src/config/appConfig.ts</code> و<code>index.html</code>) لتعمل تلقائياً بعد الرفع على Vercel دون أي تعديل يدوي.
+          </p>
+        </div>
+
+        <!-- Street Map Lock Info -->
+        <div class="p-3.5 rounded-2xl bg-emerald-950/50 border border-emerald-500/40 flex items-center justify-between gap-3 flex-wrap">
+          <div class="flex items-center gap-2.5">
+            <span class="text-xl">☀️</span>
+            <div>
+              <div class="text-xs font-black text-emerald-300">تم إلغاء النظام الليلي من خريطة الشوارع</div>
+              <div class="text-[11px] text-slate-300">خريطة الشوارع تعمل بالوضع النهاري الواضح دائماً وتمت إزالة زر التبديل الليلي للخريطة.</div>
+            </div>
+          </div>
+          <span class="text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2.5 py-1 rounded-full">مفعل ومثبت</span>
+        </div>
+
+        <!-- 1. App Identity Section -->
+        <div class="p-4 rounded-3xl bg-slate-900/60 border border-white/10 space-y-3">
+          <div class="text-xs font-black text-emerald-400 flex items-center gap-1.5 border-b border-white/10 pb-2">
+            <span>🏷️</span>
+            <span>1. التحكم في اسم التطبيق وهويته</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">اسم التطبيق الرئيسي *</label>
+              <input type="text" id="cfg-app-name" value="${escapeHtml(cfg.appName)}" required class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+            </div>
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">الاسم المختصر (لشاشة الهاتف / PWA)</label>
+              <input type="text" id="cfg-app-short-name" value="${escapeHtml(cfg.appShortName)}" required class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+            </div>
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">الشعار اللفظي بجانب الاسم</label>
+              <input type="text" id="cfg-app-subtitle" value="${escapeHtml(cfg.appSubtitle)}" placeholder="مثال: الأقرب لك دائماً" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+            </div>
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">الوصف أسفل العنوان وفي المتصفح</label>
+              <input type="text" id="cfg-app-description" value="${escapeHtml(cfg.appDescription)}" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Admin Password Section -->
+        <div class="p-4 rounded-3xl bg-slate-900/60 border border-amber-500/30 space-y-3">
+          <div class="text-xs font-black text-amber-400 flex items-center gap-1.5 border-b border-white/10 pb-2">
+            <span>🔐</span>
+            <span>2. تعديل كلمة سر لوحة التحكم</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs items-end">
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">كلمة المرور المعتمدة *</label>
+              <div class="flex items-center gap-2">
+                <input type="password" id="cfg-admin-password" value="${escapeHtml(cfg.adminPassword)}" required minlength="1" maxlength="32" autocomplete="new-password" class="flex-1 bg-slate-800 border border-slate-700 focus:border-amber-500 rounded-xl p-2.5 text-white font-mono outline-none" dir="ltr" />
+                <button type="button" id="btn-toggle-cfg-pwd" class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 px-3 py-2.5 rounded-xl text-xs font-bold shrink-0">
+                  👁️ إظهار
+                </button>
+              </div>
+            </div>
+            <div class="text-[11px] text-slate-400 leading-relaxed">
+              تُستخدم كلمة المرور عند الدخول للوحة الإدارة السرية وتُحفظ مباشرة داخل الكود المصدري.
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. User Page Icon Visibility Section -->
+        <div class="p-4 rounded-3xl bg-slate-900/60 border border-blue-500/30 space-y-4">
+          <div class="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2">
+            <div class="text-xs font-black text-blue-400 flex items-center gap-1.5">
+              <span>🎛️</span>
+              <span>3. إخفاء وإظهار الأيقونات من صفحة المستخدم</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button type="button" id="btn-icons-show-all" class="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all">
+                ✓ إظهار الكل
+              </button>
+              <button type="button" id="btn-icons-minimal" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all">
+                الأساسيات فقط
+              </button>
+              <button type="button" id="btn-icons-hide-all" class="bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all">
+                ✕ إخفاء الكل
+              </button>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <div class="text-[11px] font-bold text-slate-300">أيقونات وشارات الشريط العلوي (الهيدر):</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              ${headerToggles.map(renderToggleCard).join('')}
+            </div>
+          </div>
+
+          <div class="space-y-2 pt-1">
+            <div class="text-[11px] font-bold text-slate-300">أيقونات وأدوات الخريطة:</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              ${mapToggles.map(renderToggleCard).join('')}
+            </div>
+          </div>
+        </div>
+
+        <!-- Save & Bake Action Bar -->
+        <div class="flex items-center gap-3 flex-wrap">
+          <button type="submit" id="btn-save-app-settings" class="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black py-3 px-5 rounded-2xl text-xs sm:text-sm shadow-xl transition-all active:scale-95">
+            💾 حفظ الإعدادات وتثبيتها في الكود المصدري
+          </button>
+          <button type="button" id="btn-commit-everything-vercel" class="bg-blue-600 hover:bg-blue-500 text-white font-black py-3 px-4 rounded-2xl text-xs sm:text-sm shadow-lg transition-all active:scale-95">
+            🚀 اعتماد كل شيء لـ Vercel
+          </button>
+        </div>
+      </form>
+    `;
+  }
+
+  // Tab 6: Source Code & GitHub / Vercel Export
   private renderSourceCodeTab(): string {
     const stationsCode = StationStorage.generateSourceCodeTypeScript();
     const logoCode = StationStorage.generateLogoSourceCode();
+    const configCode = AppConfigService.generateConfigSourceCode();
 
     return `
       <div class="space-y-4 max-w-3xl mx-auto text-right">
         
         <div>
           <h4 class="text-base font-bold text-white mb-1">
-            تثبيت البيانات والشعار في الكود المصدري للتطبيق (GitHub & Vercel)
+            اعتماد وتثبيت كافة التعديلات في الكود المصدري للتطبيق (GitHub & Vercel)
           </h4>
           <p class="text-xs text-slate-400">
-            تلبية لطلبك: يتم حفظ المحطات الـ (${this.stations.length}) المرفوعة والمعدلة مباشرة في الكود المصدري (src/data/defaultStations.ts)، دون الحاجة لنسخ أو لصق أي كود يدوياً!
+            يتم حفظ المحطات الـ (${this.stations.length}) والشعارات واسم التطبيق وكلمة السر وإعدادات إظهار/إخفاء الأيقونات مباشرة في الكود المصدري، لتُرفع على Vercel وتعمل فوراً دون أي تعديل يدوي!
           </p>
         </div>
 
@@ -1193,13 +1368,13 @@ export class AdminModalComponent {
         <div class="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-emerald-950/90 to-slate-900/90 border-2 border-emerald-500/60 shadow-xl flex items-center justify-between gap-4 flex-wrap">
           <div class="flex-1">
             <div class="flex items-center gap-2 mb-1">
-              <span class="text-xl">💾</span>
+              <span class="text-xl">🚀</span>
               <h5 class="text-sm sm:text-base font-black text-emerald-400">
-                حفظ المحطات مباشرة في الكود المصدري (src/data/defaultStations.ts)
+                اعتماد وتثبيت كافة التعديلات في المشروع الآن (جاهز للرفع على Vercel)
               </h5>
             </div>
             <p class="text-xs text-slate-300 leading-relaxed">
-              بالضغط على هذا الزر يتم فحص المحطات الحالية (${this.stations.length} محطة) وكتابتها مباشرة في ملف الكود المصدري بالمشروع، لتكون مدمجة وثابتة عند تصدير التطبيق إلى GitHub أو Vercel.
+              بالضغط على هذا الزر يتم تثبيت جميع المحطات (${this.stations.length} محطة) + شعار التطبيق والدبابيس + الاسم وكلمة السر وإعدادات الأيقونات داخل ملفات الكود المصدري (<code>defaultStations.ts</code>, <code>cargasLogo.ts</code>, <code>appConfig.ts</code>, <code>index.html</code>) وإلغاء الوضع الليلي للخريطة نهائياً.
             </p>
           </div>
           <button 
@@ -1207,7 +1382,7 @@ export class AdminModalComponent {
             class="bg-emerald-600 hover:bg-emerald-500 text-white font-black px-5 py-3 rounded-2xl text-xs sm:text-sm shadow-xl shadow-emerald-950/60 transition-all flex items-center gap-2 shrink-0 active:scale-95"
           >
             <span>💾</span>
-            <span>تثبيت في الكود المصدري الآن</span>
+            <span>اعتماد وتثبيت كل التعديلات الآن</span>
           </button>
         </div>
 
@@ -1290,6 +1465,34 @@ export class AdminModalComponent {
           </div>
 
           <pre class="bg-slate-950 p-3 rounded-xl border border-white/5 font-mono text-[11px] text-blue-300 max-h-36 overflow-y-auto custom-scrollbar select-all" dir="ltr">${logoCode.slice(0, 300)}... [تم اختصار العرض]</pre>
+        </div>
+
+        <!-- Download & Copy appConfig.ts -->
+        <div class="p-4 rounded-2xl bg-slate-800/40 border border-slate-700/50 space-y-3">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <span class="text-xs font-bold text-white">3. كود إعدادات الاسم وكلمة السر والأيقونات (src/config/appConfig.ts):</span>
+              <div class="text-[10px] text-amber-400">يثبت اسم التطبيق وكلمة المرور وإظهار/إخفاء الأيقونات لـ Vercel</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button 
+                id="btn-copy-config-code" 
+                class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-sm"
+              >
+                <span>📋</span>
+                <span>نسخ الإعدادات</span>
+              </button>
+              <button 
+                id="btn-download-config-file" 
+                class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-sm"
+              >
+                <span>💾</span>
+                <span>تحميل appConfig.ts</span>
+              </button>
+            </div>
+          </div>
+
+          <pre class="bg-slate-950 p-3 rounded-xl border border-white/5 font-mono text-[11px] text-amber-300 max-h-48 overflow-y-auto custom-scrollbar select-all" dir="ltr">${escapeHtml(configCode)}</pre>
         </div>
 
       </div>
@@ -1409,11 +1612,11 @@ export class AdminModalComponent {
     const handleDirectSave = async () => {
       SoundService.playChime('click');
       const count = this.stations.length;
-      ToastService.show('جارٍ اعتماد وتثبيت كافة المحطات والشعارات في الكود المصدري...', 'info', 2000);
+      ToastService.show('جارٍ اعتماد وتثبيت كافة المحطات والشعارات والإعدادات في الكود المصدري...', 'info', 2000);
       const res = await StationStorage.commitAllEditsToSourceCode();
       if (res.success) {
         SoundService.playChime('start');
-        ToastService.show(`✅ تم اعتماد وتثبيت ${count} محطة والشعارات مباشرة في الكود المصدري بنجاح (جاهز لبناء APK)!`, 'success', 5000);
+        ToastService.show(`✅ تم اعتماد وتثبيت ${count} محطة والشعارات واسم التطبيق وكلمة السر والأيقونات في الكود المصدري (جاهز لـ Vercel)!`, 'success', 5000);
       } else {
         ToastService.show(`تم الحفظ في التخزين (${res.message})`, 'info', 4000);
       }
@@ -1948,7 +2151,124 @@ export class AdminModalComponent {
       this.renderDashboard();
     });
 
-    // Tab 5 Events: Source code & Clear default data
+    // Tab 5 (Settings) Events: App Name, Password, Icon Visibility & Commit All
+    const collectIconsFromDom = (): UserIconsVisibility => {
+      const icons = { ...AppConfigService.getConfig().userIcons };
+      this.container.querySelectorAll('.cfg-icon-checkbox').forEach((el) => {
+        const cb = el as HTMLInputElement;
+        const key = cb.dataset.iconKey as keyof UserIconsVisibility | undefined;
+        if (key && key in icons) {
+          icons[key] = cb.checked;
+        }
+      });
+      return icons;
+    };
+
+    const setAllIconCheckboxes = (predicate: (key: keyof UserIconsVisibility) => boolean) => {
+      this.container.querySelectorAll('.cfg-icon-checkbox').forEach((el) => {
+        const cb = el as HTMLInputElement;
+        const key = cb.dataset.iconKey as keyof UserIconsVisibility | undefined;
+        if (key) cb.checked = predicate(key);
+      });
+    };
+
+    this.container.querySelector('#btn-toggle-cfg-pwd')?.addEventListener('click', () => {
+      const pwdInput = this.container.querySelector('#cfg-admin-password') as HTMLInputElement | null;
+      const btn = this.container.querySelector('#btn-toggle-cfg-pwd');
+      if (!pwdInput || !btn) return;
+      const showing = pwdInput.type === 'text';
+      pwdInput.type = showing ? 'password' : 'text';
+      btn.textContent = showing ? '👁️ إظهار' : '🙈 إخفاء';
+    });
+
+    this.container.querySelector('#btn-icons-show-all')?.addEventListener('click', () => {
+      SoundService.playChime('click');
+      setAllIconCheckboxes(() => true);
+    });
+
+    this.container.querySelector('#btn-icons-minimal')?.addEventListener('click', () => {
+      SoundService.playChime('click');
+      const essential = new Set<keyof UserIconsVisibility>([
+        'nearestStation',
+        'locationBadge',
+        'mapSearch',
+        'recenterGps',
+        'zoomControls',
+      ]);
+      setAllIconCheckboxes((k) => essential.has(k));
+    });
+
+    this.container.querySelector('#btn-icons-hide-all')?.addEventListener('click', () => {
+      SoundService.playChime('click');
+      setAllIconCheckboxes(() => false);
+    });
+
+    const saveSettingsForm = async (alsoCommitAll: boolean) => {
+      const appName =
+        (this.container.querySelector('#cfg-app-name') as HTMLInputElement)?.value.trim() ||
+        DEFAULT_APP_CONFIG.appName;
+      const appShortName =
+        (this.container.querySelector('#cfg-app-short-name') as HTMLInputElement)?.value.trim() ||
+        appName;
+      const appSubtitle =
+        (this.container.querySelector('#cfg-app-subtitle') as HTMLInputElement)?.value.trim() ?? '';
+      const appDescription =
+        (this.container.querySelector('#cfg-app-description') as HTMLInputElement)?.value.trim() ||
+        DEFAULT_APP_CONFIG.appDescription;
+      const adminPassword =
+        (this.container.querySelector('#cfg-admin-password') as HTMLInputElement)?.value.trim() || '';
+
+      if (!adminPassword) {
+        ToastService.show('يرجى إدخال كلمة مرور صالحة غير فارغة.', 'warning');
+        return;
+      }
+
+      const userIcons = collectIconsFromDom();
+      const saved = AppConfigService.saveConfig(
+        {
+          appName,
+          appShortName,
+          appSubtitle,
+          appDescription,
+          adminPassword,
+          mapNightModeDisabled: true,
+          userIcons,
+        },
+        { skipSourceSync: true }
+      );
+
+      if (alsoCommitAll) {
+        ToastService.show('جارٍ اعتماد كافة التعديلات (المحطات + الشعارات + الإعدادات) لـ Vercel...', 'info', 2500);
+        const res = await StationStorage.commitAllEditsToSourceCode();
+        if (res.success) {
+          SoundService.playChime('start');
+          ToastService.show('✅ تم اعتماد وتثبيت كافة التعديلات في الكود المصدري بنجاح! جاهز للرفع على Vercel.', 'success', 5000);
+        } else {
+          ToastService.show(`تم الحفظ محلياً (${res.message})`, 'info', 4000);
+        }
+      } else {
+        const res = await AppConfigService.saveConfigToSourceCode(saved);
+        if (res.success) {
+          SoundService.playChime('start');
+          ToastService.show('✅ تم حفظ وتثبيت اسم التطبيق وكلمة السر وإعدادات الأيقونات في الكود المصدري بنجاح!', 'success', 4500);
+        } else {
+          SoundService.playChime('start');
+          ToastService.show('تم تطبيق الإعدادات وحفظها محلياً.', 'success');
+        }
+      }
+      this.renderDashboard();
+    };
+
+    this.container.querySelector('#app-settings-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await saveSettingsForm(false);
+    });
+
+    this.container.querySelector('#btn-commit-everything-vercel')?.addEventListener('click', async () => {
+      await saveSettingsForm(true);
+    });
+
+    // Tab 6 Events: Source code, appConfig.ts & Clear default data
     this.container.querySelector('#btn-clear-demo-data')?.addEventListener('click', () => {
       ToastService.confirm({
         title: 'إزالة البيانات الافتراضية',
@@ -2027,6 +2347,27 @@ export class AdminModalComponent {
     };
     this.container.querySelector('#btn-download-logo-file')?.addEventListener('click', downloadLogoAction);
     this.container.querySelector('#btn-download-logo-file-tab5')?.addEventListener('click', downloadLogoAction);
+
+    this.container.querySelector('#btn-copy-config-code')?.addEventListener('click', () => {
+      const cfgCode = AppConfigService.generateConfigSourceCode();
+      navigator.clipboard.writeText(cfgCode).then(() => {
+        SoundService.playChime('start');
+        ToastService.show('تم نسخ ملف إعدادات التطبيق (appConfig.ts) للحافظة!', 'success');
+      });
+    });
+
+    this.container.querySelector('#btn-download-config-file')?.addEventListener('click', () => {
+      const cfgCode = AppConfigService.generateConfigSourceCode();
+      const blob = new Blob([cfgCode], { type: 'text/typescript;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'appConfig.ts';
+      link.click();
+      URL.revokeObjectURL(url);
+      SoundService.playChime('start');
+      ToastService.show('تم تنزيل ملف appConfig.ts بنجاح!', 'success');
+    });
   }
 
   private async handleExcelFile(file: File, isRemap = false): Promise<void> {

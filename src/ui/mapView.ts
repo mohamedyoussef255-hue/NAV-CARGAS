@@ -70,8 +70,8 @@ export class MapView {
   private userMarker: L.Marker | null = null;
   private userAccuracyCircle: L.Circle | null = null;
   private stationMarkers: Map<string, L.Marker> = new Map();
-  private routePolyline: L.Polyline | null = null;
-  private routeGlowPolyline: L.Polyline | null = null;
+  private routeLayers: L.Polyline[] = [];
+  private routeSvgRenderer: L.SVG | null = null;
   private onStationSelectCallback: ((station: Station) => void) | null = null;
   private onUserLocationDragCallback: ((lat: number, lng: number) => void) | null = null;
   private pickLocationHandler: ((e: L.LeafletMouseEvent) => void) | null = null;
@@ -150,20 +150,19 @@ export class MapView {
 
   setTheme(theme: ThemeMode): void {
     this.currentTheme = theme;
-    // Keep user's preferred street or dark view synced
-    if (theme === 'dark' && this.currentTileStyle === 'dark') {
-      this.updateTileLayer();
-    }
+    // Street map night mode is permanently disabled: keep street tiles in daylight mode
+    this.currentTileStyle = 'streets';
+    this.offlineGridLayer?.setMapStyle('streets');
   }
 
   toggleTileStyle(): 'streets' | 'dark' {
-    this.currentTileStyle = this.currentTileStyle === 'streets' ? 'dark' : 'streets';
+    this.currentTileStyle = 'streets';
     this.updateTileLayer();
     return this.currentTileStyle;
   }
 
   getTileStyle(): 'streets' | 'dark' {
-    return this.currentTileStyle;
+    return 'streets';
   }
 
   setStationLogo(logo: string | null): void {
@@ -208,7 +207,8 @@ export class MapView {
   private updateTileLayer(): void {
     if (!this.map) return;
 
-    this.offlineGridLayer?.setMapStyle(this.currentTileStyle);
+    this.currentTileStyle = 'streets';
+    this.offlineGridLayer?.setMapStyle('streets');
 
     if (this.tileLayer) {
       this.map.removeLayer(this.tileLayer);
@@ -217,26 +217,13 @@ export class MapView {
     // Do NOT set crossOrigin: 'anonymous' on tile <img> tags:
     // opaque Service Worker cached tiles (status 0) and APK/WebView tile requests
     // fail CORS validation if crossOrigin is forced, causing blank tiles until zoom.
-    if (this.currentTileStyle === 'dark') {
-      this.tileLayer = L.tileLayer(
-        'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-        {
-          maxZoom: 19,
-          subdomains: 'abcd',
-          zIndex: 2,
-          keepBuffer: 4,
-          updateWhenIdle: false,
-        }
-      );
-    } else {
-      this.tileLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        zIndex: 2,
-        keepBuffer: 4,
-        updateWhenIdle: false,
-        attribution: '© OpenStreetMap contributors',
-      });
-    }
+    this.tileLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      zIndex: 2,
+      keepBuffer: 4,
+      updateWhenIdle: false,
+      attribution: '© OpenStreetMap contributors',
+    });
 
     // Reset opacity when tile actually loads (prevents stale opacity:0 on reused tile nodes)
     this.tileLayer.on('tileload', (loadEvent: L.TileEvent) => {
@@ -550,7 +537,7 @@ export class MapView {
     return marker;
   }
 
-  // Draw driving route on the map
+  // Draw driving route on the map (tri-color dashed: orange -> yellow -> green)
   drawRoute(route: RouteData): void {
     if (!this.map) return;
 
@@ -558,23 +545,59 @@ export class MapView {
 
     if (route.coordinates.length < 2) return;
 
-    // Glowing background line
-    this.routeGlowPolyline = L.polyline(route.coordinates, {
-      color: '#00e676',
-      weight: 9,
-      opacity: 0.4,
+    if (!this.routeSvgRenderer) {
+      this.routeSvgRenderer = L.svg({ padding: 0.5 });
+    }
+
+    // Tri-color dashed pattern (dash = 14px, gap = 13px => step = 27px, 3-color cycle = 81px)
+    // Dark contrast casing behind every dash keeps yellow/orange/green crisp on both light & dark maps
+    const casingLine = L.polyline(route.coordinates, {
+      renderer: this.routeSvgRenderer,
+      color: '#0B1626',
+      weight: 9.5,
+      opacity: 0.72,
+      dashArray: '14, 13',
       lineCap: 'round',
       lineJoin: 'round',
+      interactive: false,
     }).addTo(this.map);
 
-    // Sharp foreground navigation line
-    this.routePolyline = L.polyline(route.coordinates, {
-      color: '#00c853',
-      weight: 5,
-      opacity: 0.95,
+    const orangeDash = L.polyline(route.coordinates, {
+      renderer: this.routeSvgRenderer,
+      color: '#FF6D00',
+      weight: 5.5,
+      opacity: 0.98,
+      dashArray: '14, 67',
       lineCap: 'round',
       lineJoin: 'round',
+      interactive: false,
     }).addTo(this.map);
+
+    const yellowDash = L.polyline(route.coordinates, {
+      renderer: this.routeSvgRenderer,
+      color: '#FFD600',
+      weight: 5.5,
+      opacity: 0.98,
+      dashArray: '14, 67',
+      dashOffset: '54',
+      lineCap: 'round',
+      lineJoin: 'round',
+      interactive: false,
+    }).addTo(this.map);
+
+    const greenDash = L.polyline(route.coordinates, {
+      renderer: this.routeSvgRenderer,
+      color: '#00E676',
+      weight: 5.5,
+      opacity: 0.98,
+      dashArray: '14, 67',
+      dashOffset: '27',
+      lineCap: 'round',
+      lineJoin: 'round',
+      interactive: false,
+    }).addTo(this.map);
+
+    this.routeLayers = [casingLine, orangeDash, yellowDash, greenDash];
 
     // Fit map bounds to show full route comfortably
     const bounds = L.latLngBounds(route.coordinates);
@@ -588,14 +611,10 @@ export class MapView {
 
   clearRoute(): void {
     if (!this.map) return;
-    if (this.routePolyline) {
-      this.map.removeLayer(this.routePolyline);
-      this.routePolyline = null;
+    for (const layer of this.routeLayers) {
+      this.map.removeLayer(layer);
     }
-    if (this.routeGlowPolyline) {
-      this.map.removeLayer(this.routeGlowPolyline);
-      this.routeGlowPolyline = null;
-    }
+    this.routeLayers = [];
   }
 
   flyToLocation(lat: number, lng: number, zoom = 15): void {

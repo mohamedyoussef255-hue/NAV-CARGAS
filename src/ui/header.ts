@@ -1,7 +1,10 @@
 import { StationStorage } from '../services/stationStorage';
+import { AppConfigService } from '../services/appConfigService';
+import { AppConfig } from '../config/appConfig';
 import { SoundService } from '../services/soundService';
 import { PwaService, PwaState } from '../services/pwaService';
 import { DEFAULT_CARGAS_LOGO_DATA_URL } from '../assets/cargasLogo';
+import { escapeHtml } from '../utils/html';
 
 export class HeaderComponent {
   private logoClickCount = 0;
@@ -36,28 +39,30 @@ export class HeaderComponent {
     const currentTheme = StationStorage.getTheme();
     const appLogo = StationStorage.getAppLogo();
     const pwa = PwaService.getState();
+    const cfg = AppConfigService.getConfig();
+    const icons = cfg.userIcons;
 
     container.innerHTML = `
       <header class="app-header shadow-lg z-30 transition-colors duration-200">
         <div class="header-inner max-w-7xl mx-auto px-3 sm:px-4 py-2 flex items-center justify-between gap-2 flex-wrap">
           
           <!-- Logo & Brand -->
-          <div class="flex items-center gap-2.5 select-none group" id="header-logo-trigger" title="محطات كارجاس">
+          <div class="flex items-center gap-2.5 select-none group" id="header-logo-trigger" title="${escapeHtml(cfg.appName)}">
             <div class="logo-box relative w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center p-1 transition-transform shadow-lg border border-emerald-500/40 bg-slate-900/90 ring-2 ring-emerald-500/20">
               <div id="header-logo-img-wrapper" class="w-full h-full flex items-center justify-center overflow-hidden rounded-xl">
-                <img src="${appLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Cargas App Logo" class="w-full h-full object-contain drop-shadow" />
+                <img src="${appLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="w-full h-full object-contain drop-shadow" />
               </div>
             </div>
 
             <div class="flex flex-col text-right">
               <div class="flex items-center gap-1.5 flex-wrap">
-                <h1 class="text-base sm:text-lg font-black tracking-tight leading-none brand-title">
-                  محطات كارجاس
+                <h1 id="header-app-title" class="text-base sm:text-lg font-black tracking-tight leading-none brand-title">
+                  ${escapeHtml(cfg.appName)}
                 </h1>
-                <span class="text-[11px] sm:text-xs font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-0.5 rounded-full leading-none">
-                  (الأقرب لك دائماً)
+                <span id="header-app-subtitle" class="${cfg.appSubtitle ? 'inline-flex' : 'hidden'} text-[11px] sm:text-xs font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-0.5 rounded-full leading-none">
+                  ${cfg.appSubtitle ? `(${escapeHtml(cfg.appSubtitle)})` : ''}
                 </span>
-                <span id="network-status-badge" class="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                <span id="network-status-badge" class="${icons.networkBadge ? 'inline-flex' : 'hidden'} items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                   pwa.isOnline
                     ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
                     : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
@@ -66,8 +71,8 @@ export class HeaderComponent {
                   <span id="network-status-text">${pwa.isOnline ? 'متصل (Online)' : 'وضع الأوفلاين نشط (Offline Mode Ready)'}</span>
                 </span>
               </div>
-              <span class="text-[10px] sm:text-[11px] text-slate-400 font-medium leading-tight mt-0.5">
-                الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين
+              <span id="header-app-description" class="text-[10px] sm:text-[11px] text-slate-400 font-medium leading-tight mt-0.5">
+                ${escapeHtml(cfg.appDescription)}
               </span>
             </div>
           </div>
@@ -75,11 +80,11 @@ export class HeaderComponent {
           <!-- Actions -->
           <div class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
             
-            <!-- Quick Nearest Cargas Button -->
+            <!-- Quick Nearest Station Button -->
             <button 
               id="btn-nearest-station"
-              class="btn-nearest flex items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs sm:text-sm shadow-md shadow-emerald-900/30 transition-all active:scale-95"
-              title="تحديد وتوجيه إلى أقرب محطة كارجاس من موقعي الحالي"
+              class="btn-nearest ${icons.nearestStation ? 'flex' : 'hidden'} items-center gap-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold px-3 py-1.5 sm:px-3.5 sm:py-2 rounded-xl text-xs sm:text-sm shadow-md shadow-emerald-900/30 transition-all active:scale-95"
+              title="تحديد وتوجيه إلى أقرب محطة من موقعي الحالي"
             >
               <svg class="w-4 h-4 animate-bounce" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <circle cx="12" cy="12" r="10"/>
@@ -91,7 +96,7 @@ export class HeaderComponent {
             <!-- Download Offline Map Button -->
             <button
               id="btn-offline-map"
-              class="btn-icon px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl flex items-center gap-1.5 text-xs font-bold text-emerald-300 border border-emerald-500/30 bg-emerald-950/40 hover:bg-emerald-900/50 transition-all"
+              class="btn-icon ${icons.offlineMap ? 'flex' : 'hidden'} px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl items-center gap-1.5 text-xs font-bold text-emerald-300 border border-emerald-500/30 bg-emerald-950/40 hover:bg-emerald-900/50 transition-all"
               title="تحميل خريطة مصر للعمل أوفلاين"
             >
               <span>🗺️</span>
@@ -99,10 +104,10 @@ export class HeaderComponent {
               <span class="lg:hidden">خريطة أوفلاين</span>
             </button>
 
-            <!-- PWA Install Button (hidden automatically when installed in standalone mode) -->
+            <!-- PWA Install Button (hidden automatically when installed in standalone mode or disabled in settings) -->
             <button
               id="btn-install-pwa"
-              class="${pwa.isInstalled ? 'hidden' : 'flex'} items-center gap-1.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-xs font-bold bg-blue-600/25 hover:bg-blue-600/40 text-blue-200 border border-blue-500/40 transition-all"
+              class="${icons.installPwa && !pwa.isInstalled ? 'flex' : 'hidden'} items-center gap-1.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl text-xs font-bold bg-blue-600/25 hover:bg-blue-600/40 text-blue-200 border border-blue-500/40 transition-all"
               title="تثبيت التطبيق للعمل أوفلاين"
             >
               <span>📲</span>
@@ -113,7 +118,7 @@ export class HeaderComponent {
             <!-- All Stations List / Search Modal Button -->
             <button
               id="btn-open-list"
-              class="btn-icon p-2 sm:px-3 sm:py-2 rounded-xl flex items-center gap-1.5 text-xs font-bold transition-all"
+              class="btn-icon ${icons.stationsList ? 'flex' : 'hidden'} p-2 sm:px-3 sm:py-2 rounded-xl items-center gap-1.5 text-xs font-bold transition-all"
               title="دليل وبحث المحطات"
             >
               <svg class="w-4 h-4 sm:w-4 sm:h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -127,11 +132,11 @@ export class HeaderComponent {
               <span class="hidden md:inline">قائمة المحطات</span>
             </button>
 
-            <!-- Dark / Light Mode Toggle -->
+            <!-- Dark / Light Mode UI Toggle -->
             <button
               id="btn-toggle-theme"
-              class="btn-icon p-2 rounded-xl text-slate-300 hover:text-white transition-all"
-              title="التبديل بين الوضع الليلي والنهاري"
+              class="btn-icon ${icons.themeToggle ? 'flex' : 'hidden'} p-2 rounded-xl text-slate-300 hover:text-white transition-all"
+              title="التبديل بين مظهر الواجهة الليلي والنهاري"
             >
               <span id="theme-icon-container">
                 ${
@@ -162,11 +167,53 @@ export class HeaderComponent {
     this.attachEventListeners(container);
   }
 
+  applyConfig(container: HTMLElement, cfg: AppConfig): void {
+    const titleEl = container.querySelector('#header-app-title');
+    if (titleEl) titleEl.textContent = cfg.appName;
+
+    const triggerEl = container.querySelector('#header-logo-trigger');
+    if (triggerEl) triggerEl.setAttribute('title', cfg.appName);
+
+    const subEl = container.querySelector('#header-app-subtitle');
+    if (subEl) {
+      if (cfg.appSubtitle) {
+        subEl.textContent = `(${cfg.appSubtitle})`;
+        subEl.classList.remove('hidden');
+        subEl.classList.add('inline-flex');
+      } else {
+        subEl.textContent = '';
+        subEl.classList.add('hidden');
+        subEl.classList.remove('inline-flex');
+      }
+    }
+
+    const descEl = container.querySelector('#header-app-description');
+    if (descEl) descEl.textContent = cfg.appDescription;
+
+    const icons = cfg.userIcons;
+    const pwa = PwaService.getState();
+
+    const toggleFlex = (selector: string, show: boolean, displayClass = 'flex') => {
+      const el = container.querySelector(selector);
+      if (!el) return;
+      el.classList.toggle('hidden', !show);
+      el.classList.toggle(displayClass, show);
+    };
+
+    toggleFlex('#btn-nearest-station', icons.nearestStation, 'flex');
+    toggleFlex('#btn-offline-map', icons.offlineMap, 'flex');
+    toggleFlex('#btn-install-pwa', icons.installPwa && !pwa.isInstalled, 'flex');
+    toggleFlex('#btn-open-list', icons.stationsList, 'flex');
+    toggleFlex('#btn-toggle-theme', icons.themeToggle, 'flex');
+    toggleFlex('#network-status-badge', icons.networkBadge, 'inline-flex');
+  }
+
   updatePwaState(container: HTMLElement, pwa: PwaState): void {
+    const cfg = AppConfigService.getConfig();
     const badge = container.querySelector('#network-status-badge');
     const text = container.querySelector('#network-status-text');
     if (badge && text) {
-      badge.className = `inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+      badge.className = `${cfg.userIcons.networkBadge ? 'inline-flex' : 'hidden'} items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${
         pwa.isOnline
           ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
           : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
@@ -180,8 +227,9 @@ export class HeaderComponent {
 
     const installBtn = container.querySelector('#btn-install-pwa');
     if (installBtn) {
-      installBtn.classList.toggle('hidden', pwa.isInstalled);
-      installBtn.classList.toggle('flex', !pwa.isInstalled);
+      const showInstall = cfg.userIcons.installPwa && !pwa.isInstalled;
+      installBtn.classList.toggle('hidden', !showInstall);
+      installBtn.classList.toggle('flex', showInstall);
     }
   }
 

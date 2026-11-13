@@ -3,6 +3,46 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { VitePWA } from 'vite-plugin-pwa';
 
+function loadBakedAppManifestMeta(): { name: string; shortName: string; description: string } {
+  const fallback = {
+    name: 'محطات كارجاس (الأقرب لك دائماً)',
+    shortName: 'كارجاس',
+    description:
+      'تطبيق الملاحة الذكي لمحطات غاز كارجاس - يعمل أوفلاين بالكامل مع تحديد أقرب محطة وحفظ الخريطة والبيانات.',
+  };
+  try {
+    const cfgPath = path.resolve(process.cwd(), 'src/config/appConfig.ts');
+    if (!fs.existsSync(cfgPath)) return fallback;
+    const raw = fs.readFileSync(cfgPath, 'utf-8');
+    const marker = 'export const BAKED_APP_CONFIG: AppConfig = ';
+    const startIdx = raw.indexOf(marker);
+    if (startIdx === -1) return fallback;
+    const jsonStart = startIdx + marker.length;
+    const endIdx = raw.lastIndexOf(';');
+    if (endIdx <= jsonStart) return fallback;
+    const parsed = JSON.parse(raw.slice(jsonStart, endIdx));
+    const appName = typeof parsed.appName === 'string' && parsed.appName.trim() ? parsed.appName.trim() : 'محطات كارجاس';
+    const appSubtitle = typeof parsed.appSubtitle === 'string' ? parsed.appSubtitle.trim() : '';
+    const appShortName =
+      typeof parsed.appShortName === 'string' && parsed.appShortName.trim()
+        ? parsed.appShortName.trim()
+        : appName;
+    const appDescription =
+      typeof parsed.appDescription === 'string' && parsed.appDescription.trim()
+        ? parsed.appDescription.trim()
+        : fallback.description;
+    return {
+      name: appSubtitle ? `${appName} (${appSubtitle})` : appName,
+      shortName: appShortName,
+      description: appDescription,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+const bakedManifestMeta = loadBakedAppManifestMeta();
+
 export default defineConfig({
   server: {
     port: 3000,
@@ -21,10 +61,9 @@ export default defineConfig({
       ],
       manifest: {
         id: '/',
-        name: 'محطات كارجاس (الأقرب لك دائماً)',
-        short_name: 'كارجاس',
-        description:
-          'تطبيق الملاحة الذكي لمحطات غاز كارجاس - يعمل أوفلاين بالكامل مع تحديد أقرب محطة وحفظ الخريطة والبيانات.',
+        name: bakedManifestMeta.name,
+        short_name: bakedManifestMeta.shortName,
+        description: bakedManifestMeta.description,
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',
@@ -308,6 +347,164 @@ export default defineConfig({
                       success: true,
                       unchanged: !changed,
                       message: `تم حفظ وتثبيت ${typeLabel} مباشرة في الكود المصدري (src/assets/cargasLogo.ts) بنجاح!`,
+                    })
+                  );
+                })
+              )
+              .catch((err: any) => {
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Error' }));
+              });
+            return;
+          }
+
+          // POST /api/save-config: writes app name, admin password, and icon visibility into src/config/appConfig.ts & index.html
+          if (req.url === '/api/save-config' && req.method === 'POST') {
+            void readJsonBody(req)
+              .then((parsed) =>
+                enqueueWrite(() => {
+                  const cfg = parsed?.config;
+                  if (!cfg || typeof cfg !== 'object') {
+                    res.statusCode = 400;
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                    res.end(JSON.stringify({ success: false, error: 'بيانات الإعدادات غير صالحة' }));
+                    return;
+                  }
+
+                  const icons = cfg.userIcons || {};
+                  const normalized = {
+                    appName:
+                      typeof cfg.appName === 'string' && cfg.appName.trim()
+                        ? cfg.appName.trim()
+                        : 'محطات كارجاس',
+                    appShortName:
+                      typeof cfg.appShortName === 'string' && cfg.appShortName.trim()
+                        ? cfg.appShortName.trim()
+                        : 'كارجاس',
+                    appSubtitle:
+                      typeof cfg.appSubtitle === 'string' ? cfg.appSubtitle.trim() : 'الأقرب لك دائماً',
+                    appDescription:
+                      typeof cfg.appDescription === 'string' && cfg.appDescription.trim()
+                        ? cfg.appDescription.trim()
+                        : 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+                    adminPassword:
+                      typeof cfg.adminPassword === 'string' && cfg.adminPassword.trim()
+                        ? cfg.adminPassword.trim()
+                        : '0000',
+                    mapNightModeDisabled: true,
+                    userIcons: {
+                      nearestStation: icons.nearestStation ?? true,
+                      offlineMap: icons.offlineMap ?? true,
+                      installPwa: icons.installPwa ?? true,
+                      stationsList: icons.stationsList ?? true,
+                      themeToggle: icons.themeToggle ?? true,
+                      networkBadge: icons.networkBadge ?? true,
+                      locationBadge: icons.locationBadge ?? true,
+                      mapSearch: icons.mapSearch ?? true,
+                      recenterGps: icons.recenterGps ?? true,
+                      zoomControls: icons.zoomControls ?? true,
+                      fitAllStations: icons.fitAllStations ?? true,
+                      quickList: icons.quickList ?? true,
+                    },
+                  };
+
+                  const configFile = path.resolve(process.cwd(), 'src/config/appConfig.ts');
+                  const tsContent = `export interface UserIconsVisibility {
+  nearestStation: boolean;
+  offlineMap: boolean;
+  installPwa: boolean;
+  stationsList: boolean;
+  themeToggle: boolean;
+  networkBadge: boolean;
+  locationBadge: boolean;
+  mapSearch: boolean;
+  recenterGps: boolean;
+  zoomControls: boolean;
+  fitAllStations: boolean;
+  quickList: boolean;
+}
+
+export interface AppConfig {
+  appName: string;
+  appShortName: string;
+  appSubtitle: string;
+  appDescription: string;
+  adminPassword: string;
+  mapNightModeDisabled: boolean;
+  userIcons: UserIconsVisibility;
+}
+
+export const DEFAULT_USER_ICONS: UserIconsVisibility = {
+  nearestStation: true,
+  offlineMap: true,
+  installPwa: true,
+  stationsList: true,
+  themeToggle: true,
+  networkBadge: true,
+  locationBadge: true,
+  mapSearch: true,
+  recenterGps: true,
+  zoomControls: true,
+  fitAllStations: true,
+  quickList: true,
+};
+
+export const DEFAULT_APP_CONFIG: AppConfig = {
+  appName: 'محطات كارجاس',
+  appShortName: 'كارجاس',
+  appSubtitle: 'الأقرب لك دائماً',
+  appDescription: 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+  adminPassword: '0000',
+  mapNightModeDisabled: true,
+  userIcons: { ...DEFAULT_USER_ICONS },
+};
+
+/**
+ * الإعدادات المعتمدة والمثبتة في الكود المصدري (تُقرأ مباشرة في Vercel و APK)
+ */
+export const BAKED_APP_CONFIG: AppConfig = ${JSON.stringify(normalized, null, 2)};
+`;
+
+                  const configChanged = atomicWriteIfChanged(configFile, tsContent);
+
+                  // Sync title and meta tags in index.html cleanly
+                  const indexPath = path.resolve(process.cwd(), 'index.html');
+                  let htmlChanged = false;
+                  if (fs.existsSync(indexPath)) {
+                    const escapeAttr = (v: string) =>
+                      v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    const fullTitle = normalized.appSubtitle
+                      ? `${normalized.appName} (${normalized.appSubtitle})`
+                      : normalized.appName;
+                    let html = fs.readFileSync(indexPath, 'utf-8');
+                    html = html.replace(/<title>[\s\S]*?<\/title>/, () => `<title>${escapeAttr(fullTitle)}</title>`);
+                    html = html.replace(
+                      /<meta name="apple-mobile-web-app-title" content="[^"]*"\s*\/?>/,
+                      () => `<meta name="apple-mobile-web-app-title" content="${escapeAttr(normalized.appShortName)}" />`
+                    );
+                    html = html.replace(
+                      /<meta property="og:title" content="[^"]*"\s*\/?>/,
+                      () => `<meta property="og:title" content="${escapeAttr(fullTitle)}" />`
+                    );
+                    html = html.replace(
+                      /<meta name="description" content="[^"]*"\s*\/?>/,
+                      () => `<meta name="description" content="${escapeAttr(normalized.appDescription)}" />`
+                    );
+                    html = html.replace(
+                      /<meta property="og:description" content="[^"]*"\s*\/?>/,
+                      () => `<meta property="og:description" content="${escapeAttr(normalized.appDescription)}" />`
+                    );
+                    htmlChanged = atomicWriteIfChanged(indexPath, html);
+                  }
+
+                  res.statusCode = 200;
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.end(
+                    JSON.stringify({
+                      success: true,
+                      unchanged: !configChanged && !htmlChanged,
+                      message: 'تم اعتماد وتثبيت إعدادات التطبيق وكلمة المرور والأيقونات في الكود المصدري بنجاح!',
                     })
                   );
                 })

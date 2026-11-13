@@ -1,4 +1,6 @@
 import { Station, UserLocation } from './types';
+import { AppConfig } from './config/appConfig';
+import { AppConfigService } from './services/appConfigService';
 import { StationStorage } from './services/stationStorage';
 import { LocationService } from './services/locationService';
 import { RoutingService } from './services/routingService';
@@ -36,6 +38,9 @@ class CargasApp {
 
   constructor() {
     PwaService.init();
+    const initialConfig = AppConfigService.getConfig();
+    AppConfigService.applyDocumentBranding(initialConfig);
+
     this.userLocation = LocationService.getLocation();
     this.stations = StationStorage.getStations();
     this.visibleStations = this.stations;
@@ -45,11 +50,11 @@ class CargasApp {
     appEl.innerHTML = `
       <div id="header-container" class="relative z-40"></div>
       
-      <!-- Framed Map Wrapper with Street Details -->
+      <!-- Framed Map Wrapper with Street Details (Daylight street mode only) -->
       <div id="map-wrapper" class="relative w-full flex-1 overflow-hidden">
         <div id="map-container" class="w-full h-full"></div>
 
-        <!-- Top Map Overlay: Location Badge + Map Search Bar + Style Switcher -->
+        <!-- Top Map Overlay: Location Badge + Map Search Bar -->
         <div id="map-top-overlay">
           <!-- Interactive Current User Location Pill -->
           <button id="btn-current-location-badge" class="map-status-badge" title="اضغط لتحديد أو تغيير موقعك الحالي بدقة">
@@ -60,12 +65,6 @@ class CargasApp {
 
           <!-- Interactive Map Search Bar & Service Filter Chips -->
           <div id="map-search-container"></div>
-
-          <!-- Quick Map Style Switcher -->
-          <button id="btn-toggle-map-style" class="map-style-switcher" title="تبديل نمط الخريطة (شوارع تفصيلية / وضع ليلي)">
-            <span id="map-style-icon">🗺️</span>
-            <span id="map-style-text" class="text-xs font-bold font-cairo">خريطة الشوارع</span>
-          </button>
         </div>
 
         ${import.meta.env.DEV ? `
@@ -208,6 +207,7 @@ class CargasApp {
       },
     });
     this.header.render(headerContainer);
+    this.applyAppConfig(initialConfig);
     PwaService.subscribe((pwaState) => {
       this.header.updatePwaState(headerContainer, pwaState);
     });
@@ -341,22 +341,6 @@ class CargasApp {
       this.locationModal.show();
     });
 
-    document.getElementById('btn-toggle-map-style')?.addEventListener('click', () => {
-      SoundService.playChime('click');
-      const style = this.map.toggleTileStyle();
-      const textEl = document.getElementById('map-style-text');
-      const iconEl = document.getElementById('map-style-icon');
-      if (textEl && iconEl) {
-        if (style === 'dark') {
-          textEl.textContent = 'خريطة ليلية';
-          iconEl.textContent = '🌙';
-        } else {
-          textEl.textContent = 'خريطة الشوارع';
-          iconEl.textContent = '🗺️';
-        }
-      }
-    });
-
     document.getElementById('btn-recenter-user')?.addEventListener('click', async () => {
       SoundService.playChime('click');
       this.map.recenterUser(this.userLocation);
@@ -468,7 +452,15 @@ class CargasApp {
 
     this.startGpsTracking();
 
-    // 15. Seed/Load IndexedDB Station Data for 100% Offline Persistence & Auto-Sync Dev Edits to Source
+    AppConfigService.onConfigUpdated((updatedConfig) => {
+      this.applyAppConfig(updatedConfig);
+    });
+
+    // 15. Seed/Load IndexedDB Station Data & AppConfig for 100% Offline Persistence & Auto-Sync Dev Edits
+    void AppConfigService.initializeConfigSync().then((syncedCfg) => {
+      this.applyAppConfig(syncedCfg);
+    });
+
     void StationStorage.initializeOfflineStorage().then((seededStations) => {
       if (seededStations && seededStations.length > 0) {
         this.stations = seededStations;
@@ -480,6 +472,28 @@ class CargasApp {
         this.updateCoordinateHealthBanner();
       }
     });
+  }
+
+  private applyAppConfig(cfg: AppConfig): void {
+    AppConfigService.applyDocumentBranding(cfg);
+    const headerContainer = document.getElementById('header-container');
+    if (headerContainer) {
+      this.header.applyConfig(headerContainer, cfg);
+    }
+
+    const icons = cfg.userIcons;
+    document.getElementById('btn-current-location-badge')?.classList.toggle('hidden', !icons.locationBadge);
+    document.getElementById('map-search-container')?.classList.toggle('hidden', !icons.mapSearch);
+
+    document.getElementById('btn-recenter-user')?.classList.toggle('hidden', !icons.recenterGps);
+    document.getElementById('btn-map-zoom-in')?.classList.toggle('hidden', !icons.zoomControls);
+    document.getElementById('btn-map-zoom-out')?.classList.toggle('hidden', !icons.zoomControls);
+    document.getElementById('btn-fit-all-stations')?.classList.toggle('hidden', !icons.fitAllStations);
+    document.getElementById('btn-quick-list')?.classList.toggle('hidden', !icons.quickList);
+
+    const anyFloatingVisible =
+      icons.recenterGps || icons.zoomControls || icons.fitAllStations || icons.quickList;
+    document.querySelector('.floating-map-controls')?.classList.toggle('hidden', !anyFloatingVisible);
   }
 
   private renderMapStations(): void {

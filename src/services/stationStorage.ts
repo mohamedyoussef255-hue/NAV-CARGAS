@@ -12,6 +12,7 @@ import {
   DEFAULT_CARGAS_LOGO_DATA_URL,
   generateLogoSourceCode,
 } from '../assets/cargasLogo';
+import { AppConfigService } from './appConfigService';
 
 const STORAGE_KEY_STATIONS = 'cargas_stations_list_v1';
 const STORAGE_KEY_STATIONS_CLEARED = 'cargas_stations_cleared_v1';
@@ -600,6 +601,7 @@ export class StationStorage {
     const stationLogo = this.getStationLogo();
     await this.saveLogoToSourceCode(appLogo === DEFAULT_CARGAS_LOGO_DATA_URL ? '' : appLogo, 'app');
     await this.saveLogoToSourceCode(stationLogo === DEFAULT_CARGAS_LOGO_DATA_URL ? '' : stationLogo, 'station');
+    await AppConfigService.saveConfigToSourceCode();
     return stationsRes;
   }
 
