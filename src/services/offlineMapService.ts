@@ -36,6 +36,7 @@ export interface TileCoord {
   z: number;
   x: number;
   y: number;
+  key: string;
   url: string;
 }
 
@@ -60,6 +61,14 @@ export function tile2lng(x: number, zoom: number): number {
 }
 
 export class OfflineMapService {
+  static getTileKey(z: number, x: number, y: number): string {
+    return `${z}/${x}/${y}`;
+  }
+
+  static getTileUrl(z: number, x: number, y: number): string {
+    return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+  }
+
   static getTilesInBounds(bounds: TileDownloadBounds): TileCoord[] {
     const tiles: TileCoord[] = [];
     for (let z = bounds.minZoom; z <= bounds.maxZoom; z++) {
@@ -74,7 +83,8 @@ export class OfflineMapService {
             z,
             x,
             y,
-            url: `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+            key: this.getTileKey(z, x, y),
+            url: this.getTileUrl(z, x, y),
           });
         }
       }
@@ -94,21 +104,112 @@ export class OfflineMapService {
     return count;
   }
 
-  static async getCachedTileCount(): Promise<number> {
-    if (typeof caches === 'undefined') return 0;
+  /**
+   * Reads a tile strictly from local device storage (IndexedDB first, then Cache API)
+   * without touching the network.
+   */
+  static async getCachedTileBlob(z: number, x: number, y: number, url: string): Promise<Blob | null> {
+    const key = this.getTileKey(z, x, y);
+
     try {
-      const cache = await caches.open(OSM_TILE_CACHE_NAME);
-      const keys = await cache.keys();
-      return keys.length;
+      const idbBlob = await StationDb.getTile(key);
+      if (idbBlob && idbBlob.size > 0) {
+        return idbBlob;
+      }
     } catch {
-      return 0;
+      // fallback to Cache API
     }
+
+    if (typeof caches !== 'undefined') {
+      try {
+        const cache = await caches.open(OSM_TILE_CACHE_NAME);
+        const cached = await cache.match(url);
+        if (cached && cached.type !== 'opaque') {
+          const blob = await cached.blob();
+          if (blob && blob.size > 0) {
+            // Backfill into IndexedDB for instant WebView reads next time
+            void StationDb.putTile({ key, url, z, x, y, blob });
+            return blob;
+          }
+        }
+      } catch {
+        // ignore cache API error
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Saves a downloaded tile Blob to both IndexedDB and Cache API.
+   */
+  static async saveTileBlob(z: number, x: number, y: number, url: string, blob: Blob): Promise<void> {
+    if (!blob || blob.size === 0) return;
+    const key = this.getTileKey(z, x, y);
+
+    const tasks: Promise<unknown>[] = [
+      StationDb.putTile({ key, url, z, x, y, blob }).catch(() => false),
+    ];
+
+    if (typeof caches !== 'undefined') {
+      tasks.push(
+        caches
+          .open(OSM_TILE_CACHE_NAME)
+          .then((cache) =>
+            cache.put(
+              url,
+              new Response(blob, {
+                status: 200,
+                headers: { 'Content-Type': blob.type || 'image/png' },
+              })
+            )
+          )
+          .catch(() => undefined)
+      );
+    }
+
+    await Promise.all(tasks);
+  }
+
+  static async getCachedTileCount(): Promise<number> {
+    let idbCount = 0;
+    let cacheCount = 0;
+
+    try {
+      idbCount = await StationDb.getTileCount();
+    } catch {
+      idbCount = 0;
+    }
+
+    if (typeof caches !== 'undefined') {
+      try {
+        const cache = await caches.open(OSM_TILE_CACHE_NAME);
+        const keys = await cache.keys();
+        cacheCount = keys.length;
+      } catch {
+        cacheCount = 0;
+      }
+    }
+
+    return Math.max(idbCount, cacheCount);
   }
 
   static async clearCachedTiles(): Promise<void> {
-    if (typeof caches === 'undefined') return;
     try {
-      await caches.delete(OSM_TILE_CACHE_NAME);
+      await StationDb.clearTiles();
+    } catch {
+      // ignore
+    }
+
+    if (typeof caches !== 'undefined') {
+      try {
+        await caches.delete(OSM_TILE_CACHE_NAME);
+      } catch {
+        // ignore
+      }
+    }
+
+    try {
       await StationDb.setMeta('offline_map_stats', { cachedCount: 0, lastDownloadedAt: null });
     } catch {
       // ignore
@@ -128,26 +229,6 @@ export class OfflineMapService {
     let failed = 0;
     let currentZoom = bounds.minZoom;
 
-    if (typeof caches === 'undefined') {
-      const res: OfflineTileProgress = {
-        completed: 0,
-        total,
-        cachedNow: 0,
-        skippedExisting: 0,
-        failed: total,
-        percent: 0,
-        currentZoom,
-        done: true,
-        cancelled: false,
-      };
-      onProgress(res);
-      return res;
-    }
-
-    const cache = await caches.open(OSM_TILE_CACHE_NAME);
-    const CONCURRENCY = 6;
-    let cursor = 0;
-
     const emit = (done = false, cancelled = false) => {
       onProgress({
         completed,
@@ -162,30 +243,77 @@ export class OfflineMapService {
       });
     };
 
+    // Never issue runtime fetches if the device is offline
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const offlineState: OfflineTileProgress = {
+        completed: 0,
+        total,
+        cachedNow: 0,
+        skippedExisting: 0,
+        failed: total,
+        percent: 0,
+        currentZoom,
+        done: true,
+        cancelled: true,
+      };
+      onProgress(offlineState);
+      return offlineState;
+    }
+
+    const cache =
+      typeof caches !== 'undefined' ? await caches.open(OSM_TILE_CACHE_NAME).catch(() => null) : null;
+    const existingIdbKeys = await StationDb.getAllTileKeys().catch(() => new Set<string>());
+    const existingCacheUrls = new Set<string>();
+    if (cache) {
+      try {
+        const reqs = await cache.keys();
+        for (const r of reqs) {
+          existingCacheUrls.add(r.url);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const CONCURRENCY = 6;
+    let cursor = 0;
+
     emit(false, false);
 
     const worker = async () => {
       while (cursor < tiles.length) {
-        if (abortSignal?.aborted) return;
+        if (abortSignal?.aborted || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
         const idx = cursor++;
         const tile = tiles[idx];
         currentZoom = tile.z;
 
         try {
-          const existing = await cache.match(tile.url);
-          if (existing) {
+          if (existingIdbKeys.has(tile.key)) {
+            skippedExisting++;
+          } else if (existingCacheUrls.has(tile.url) && cache) {
+            const matched = await cache.match(tile.url);
+            if (matched && matched.type !== 'opaque') {
+              const blob = await matched.blob();
+              if (blob.size > 0) {
+                await StationDb.putTile({ key: tile.key, url: tile.url, z: tile.z, x: tile.x, y: tile.y, blob });
+              }
+            }
             skippedExisting++;
           } else {
             let response: Response | null = null;
             try {
               response = await fetch(tile.url, { mode: 'cors', signal: abortSignal });
             } catch {
-              if (!abortSignal?.aborted) {
+              if (!abortSignal?.aborted && (typeof navigator === 'undefined' || navigator.onLine)) {
                 response = await fetch(tile.url, { mode: 'no-cors', signal: abortSignal });
               }
             }
 
-            if (response && (response.ok || response.type === 'opaque')) {
+            if (response && response.ok && response.type !== 'opaque') {
+              const blob = await response.clone().blob();
+              await this.saveTileBlob(tile.z, tile.x, tile.y, tile.url, blob);
+              cachedNow++;
+            } else if (response && response.type === 'opaque' && cache) {
               await cache.put(tile.url, response.clone());
               cachedNow++;
             } else {
@@ -208,11 +336,15 @@ export class OfflineMapService {
     const workers = Array.from({ length: Math.min(CONCURRENCY, tiles.length || 1) }, () => worker());
     await Promise.all(workers);
 
-    const totalCached = await this.getCachedTileCount();
-    await StationDb.setMeta('offline_map_stats', {
-      cachedCount: totalCached,
-      lastDownloadedAt: Date.now(),
-    });
+    try {
+      const totalCached = await this.getCachedTileCount();
+      await StationDb.setMeta('offline_map_stats', {
+        cachedCount: totalCached,
+        lastDownloadedAt: Date.now(),
+      });
+    } catch {
+      // ignore
+    }
 
     const finalState: OfflineTileProgress = {
       completed,

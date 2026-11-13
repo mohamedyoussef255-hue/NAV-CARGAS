@@ -4,8 +4,116 @@ import { Station, UserLocation, RouteData, ThemeMode } from '../types';
 import { DEFAULT_CARGAS_LOGO_DATA_URL } from '../assets/cargasLogo';
 import { StationStorage } from '../services/stationStorage';
 import { LocationService } from '../services/locationService';
-import { OSM_TILE_CACHE_NAME, tile2lat, tile2lng } from '../services/offlineMapService';
+import { OfflineMapService, tile2lat, tile2lng } from '../services/offlineMapService';
 import { escapeHtml } from '../utils/html';
+
+const EMPTY_TRANSPARENT_TILE =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+class OfflineFirstTileLayer extends L.TileLayer {
+  private objectUrls = new WeakMap<HTMLElement, string>();
+
+  override onAdd(map: L.Map): this {
+    this.on('tileunload', (e: L.TileEvent) => {
+      const objUrl = this.objectUrls.get(e.tile);
+      if (objUrl) {
+        URL.revokeObjectURL(objUrl);
+        this.objectUrls.delete(e.tile);
+      }
+    });
+    return super.onAdd(map);
+  }
+
+  override createTile(coords: L.Coords, done: L.DoneCallback): HTMLElement {
+    const tile = document.createElement('img');
+    tile.alt = '';
+    tile.setAttribute('role', 'presentation');
+    tile.decoding = 'async';
+
+    const z = coords.z;
+    const x = coords.x;
+    const y = coords.y;
+    const url = OfflineMapService.getTileUrl(z, x, y);
+
+    const finishTransparent = () => {
+      tile.style.opacity = '0';
+      tile.src = EMPTY_TRANSPARENT_TILE;
+      done(undefined, tile);
+    };
+
+    const assignBlob = (blob: Blob) => {
+      const objUrl = URL.createObjectURL(blob);
+      this.objectUrls.set(tile, objUrl);
+      tile.onload = () => {
+        tile.style.opacity = '1';
+        done(undefined, tile);
+      };
+      tile.onerror = () => {
+        URL.revokeObjectURL(objUrl);
+        this.objectUrls.delete(tile);
+        finishTransparent();
+      };
+      tile.src = objUrl;
+    };
+
+    void (async () => {
+      try {
+        // 1. Always check local storage (IndexedDB + Cache API) first
+        const cachedBlob = await OfflineMapService.getCachedTileBlob(z, x, y, url);
+        if (cachedBlob) {
+          assignBlob(cachedBlob);
+          return;
+        }
+
+        // 2. Strictly prevent any runtime network fetches to external tile servers when offline
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          finishTransparent();
+          return;
+        }
+
+        // 3. Online: fetch once with CORS so we can persist into both IndexedDB & Cache API
+        try {
+          const resp = await fetch(url, { mode: 'cors' });
+          if (resp.ok) {
+            const blob = await resp.blob();
+            if (blob.size > 0) {
+              void OfflineMapService.saveTileBlob(z, x, y, url, blob);
+              assignBlob(blob);
+              return;
+            }
+          }
+        } catch {
+          // Fall through to direct <img> or Carto Voyager mirror while online
+        }
+
+        if (typeof navigator !== 'undefined' && !navigator.onLine) {
+          finishTransparent();
+          return;
+        }
+
+        // 4. Online mirror / opaque fallback without crossOrigin restriction
+        tile.onload = () => {
+          tile.style.opacity = '1';
+          done(undefined, tile);
+        };
+        tile.onerror = () => {
+          if (tile.dataset.mirrorTried !== '1' && (typeof navigator === 'undefined' || navigator.onLine)) {
+            tile.dataset.mirrorTried = '1';
+            const sub = ['a', 'b', 'c', 'd'][Math.abs(x + y) % 4];
+            tile.src = `https://${sub}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`;
+            return;
+          }
+          finishTransparent();
+        };
+        tile.src = url;
+      } catch {
+        finishTransparent();
+      }
+    })();
+
+    return tile;
+  }
+}
 
 class OfflineCoordinateGridLayer extends L.GridLayer {
   private mapStyle: 'streets' | 'dark' = 'streets';
@@ -85,6 +193,9 @@ export class MapView {
 
   private resizeObserver: ResizeObserver | null = null;
   private resizeHandler = () => this.invalidateSize();
+  private onlineHandler = () => {
+    this.tileLayer?.redraw();
+  };
 
   constructor(containerId: string) {
     this.containerId = containerId;
@@ -120,7 +231,7 @@ export class MapView {
     this.offlineGridLayer.setMapStyle(this.currentTileStyle);
     this.offlineGridLayer.addTo(this.map);
 
-    // Apply the street tiles immediately
+    // Apply the offline-first street tiles immediately
     this.updateTileLayer();
 
     // Ensure Leaflet recalculates viewport cleanly after zoom/layout transitions
@@ -140,6 +251,7 @@ export class MapView {
     setTimeout(() => this.invalidateSize(), 900);
 
     window.addEventListener('resize', this.resizeHandler);
+    window.addEventListener('online', this.onlineHandler);
   }
 
   invalidateSize(): void {
@@ -214,72 +326,12 @@ export class MapView {
       this.map.removeLayer(this.tileLayer);
     }
 
-    // Do NOT set crossOrigin: 'anonymous' on tile <img> tags:
-    // opaque Service Worker cached tiles (status 0) and APK/WebView tile requests
-    // fail CORS validation if crossOrigin is forced, causing blank tiles until zoom.
-    this.tileLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    this.tileLayer = new OfflineFirstTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       zIndex: 2,
       keepBuffer: 4,
       updateWhenIdle: false,
       attribution: '© OpenStreetMap contributors',
-    });
-
-    // Reset opacity when tile actually loads (prevents stale opacity:0 on reused tile nodes)
-    this.tileLayer.on('tileload', (loadEvent: L.TileEvent) => {
-      const tileImg = loadEvent.tile as HTMLImageElement | undefined;
-      if (tileImg) {
-        tileImg.style.opacity = '1';
-      }
-    });
-
-    // Offline & mirror fallback: check Cache API directly, then Carto mirror if online,
-    // and only hide broken icon so OfflineCoordinateGridLayer shows cleanly underneath.
-    this.tileLayer.on('tileerror', async (errEvent: L.TileErrorEvent) => {
-      const tileImg = errEvent.tile as HTMLImageElement | undefined;
-      if (!tileImg) return;
-      const originalSrc = tileImg.dataset.originalSrc || tileImg.src;
-      tileImg.dataset.originalSrc = originalSrc;
-
-      if (tileImg.dataset.cacheChecked !== '1' && typeof caches !== 'undefined' && originalSrc) {
-        tileImg.dataset.cacheChecked = '1';
-        try {
-          const cache = await caches.open(OSM_TILE_CACHE_NAME);
-          const cached = await cache.match(originalSrc);
-          if (cached && cached.type !== 'opaque') {
-            const blob = await cached.blob();
-            if (blob.size > 0) {
-              const objUrl = URL.createObjectURL(blob);
-              tileImg.onload = () => {
-                tileImg.style.opacity = '1';
-                URL.revokeObjectURL(objUrl);
-              };
-              tileImg.src = objUrl;
-              return;
-            }
-          }
-        } catch {
-          // ignore cache read error
-        }
-      }
-
-      // If primary OSM tile failed while online (rate-limit / temporary block), try Carto Voyager mirror
-      if (
-        this.currentTileStyle === 'streets' &&
-        tileImg.dataset.mirrorTried !== '1' &&
-        (typeof navigator === 'undefined' || navigator.onLine)
-      ) {
-        tileImg.dataset.mirrorTried = '1';
-        const coords = errEvent.coords;
-        if (coords && Number.isFinite(coords.z) && Number.isFinite(coords.x) && Number.isFinite(coords.y)) {
-          const sub = ['a', 'b', 'c', 'd'][Math.abs(coords.x + coords.y) % 4];
-          tileImg.src = `https://${sub}.basemaps.cartocdn.com/rastertiles/voyager/${coords.z}/${coords.x}/${coords.y}.png`;
-          return;
-        }
-      }
-
-      // Hide broken tile icon so OfflineCoordinateGridLayer shows cleanly underneath
-      tileImg.style.opacity = '0';
     });
 
     this.tileLayer.addTo(this.map);

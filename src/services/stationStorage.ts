@@ -26,6 +26,8 @@ const META_KEY_SEEDED = 'stations_seeded_v1';
 const META_KEY_CLEARED = 'stations_cleared_v1';
 const META_KEY_UPDATED_AT = 'stations_updated_at_v1';
 const META_KEY_BUNDLED_SIG = 'bundled_sig_v1';
+const META_KEY_APP_LOGO = 'app_logo_v2';
+const META_KEY_STATION_LOGO = 'station_logo_v2';
 
 const STATIONS_UPDATED_EVENT = 'cargas:stations:updated';
 const THEME_CHANGED_EVENT = 'cargas:theme:changed';
@@ -64,6 +66,8 @@ function computeStationsSignature(list: Station[]): string {
 
 export class StationStorage {
   private static memoryStations: Station[] | null = null;
+  private static memoryAppLogo: string | null = null;
+  private static memoryStationLogo: string | null = null;
   private static idbWriteQueue: Promise<unknown> = Promise.resolve();
   private static sourceWriteQueue: Promise<unknown> = Promise.resolve();
 
@@ -189,6 +193,29 @@ export class StationStorage {
         // ignore
       }
 
+      // Always ensure bundled/active app & station logos are seeded into IndexedDB for offline/WebView persistence
+      const [idbAppLogo, idbStationLogo] = await Promise.all([
+        StationDb.getMeta<string>(META_KEY_APP_LOGO),
+        StationDb.getMeta<string>(META_KEY_STATION_LOGO),
+      ]);
+      const resolvedAppLogo =
+        (isDev ? this.getAppLogo() : BAKED_APP_LOGO || idbAppLogo) || DEFAULT_CARGAS_LOGO_DATA_URL;
+      const resolvedStationLogo =
+        (isDev ? this.getStationLogo() : BAKED_STATION_LOGO || idbStationLogo) || DEFAULT_CARGAS_LOGO_DATA_URL;
+      this.memoryAppLogo = resolvedAppLogo;
+      this.memoryStationLogo = resolvedStationLogo;
+
+      if (!idbAppLogo || (!isDev && idbAppLogo !== resolvedAppLogo)) {
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_APP_LOGO, resolvedAppLogo);
+        });
+      }
+      if (!idbStationLogo || (!isDev && idbStationLogo !== resolvedStationLogo)) {
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_STATION_LOGO, resolvedStationLogo);
+        });
+      }
+
       // In production / APK builds, if the baked DEFAULT_STATIONS in source code changed
       // since the previous app install, refresh cached stations cleanly from source code!
       const storedBundledSig = idbBundledSig || lsBundledSig;
@@ -210,6 +237,8 @@ export class StationStorage {
           await StationDb.setMeta(META_KEY_CLEARED, false);
           await StationDb.setMeta(META_KEY_UPDATED_AT, now);
           await StationDb.setMeta(META_KEY_BUNDLED_SIG, bundledSignature);
+          await StationDb.setMeta(META_KEY_APP_LOGO, resolvedAppLogo);
+          await StationDb.setMeta(META_KEY_STATION_LOGO, resolvedStationLogo);
         });
         dispatchSafe(STATIONS_UPDATED_EVENT, freshlyBaked);
         return freshlyBaked;
@@ -529,23 +558,31 @@ export class StationStorage {
         // ignore
       }
     }
-    return BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+    return this.memoryAppLogo || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
   }
 
   static saveAppLogo(logoDataUrl: string | null, options?: { skipSourceSync?: boolean }): void {
     try {
+      const nextVal = logoDataUrl || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+      this.memoryAppLogo = nextVal;
       if (logoDataUrl) {
         localStorage.setItem(STORAGE_KEY_APP_LOGO, logoDataUrl);
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_APP_LOGO, logoDataUrl);
+        });
         if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode(logoDataUrl, 'app');
         }
       } else {
         localStorage.removeItem(STORAGE_KEY_APP_LOGO);
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_APP_LOGO, nextVal);
+        });
         if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode('', 'app');
         }
       }
-      dispatchSafe(APP_LOGO_CHANGED_EVENT, logoDataUrl || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL);
+      dispatchSafe(APP_LOGO_CHANGED_EVENT, nextVal);
     } catch (e) {
       console.error('Failed to save app logo', e);
     }
@@ -572,23 +609,31 @@ export class StationStorage {
         // ignore
       }
     }
-    return BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+    return this.memoryStationLogo || BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
   }
 
   static saveStationLogo(logoDataUrl: string | null, options?: { skipSourceSync?: boolean }): void {
     try {
+      const nextVal = logoDataUrl || BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+      this.memoryStationLogo = nextVal;
       if (logoDataUrl) {
         localStorage.setItem(STORAGE_KEY_STATION_LOGO, logoDataUrl);
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_STATION_LOGO, logoDataUrl);
+        });
         if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode(logoDataUrl, 'station');
         }
       } else {
         localStorage.removeItem(STORAGE_KEY_STATION_LOGO);
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_STATION_LOGO, nextVal);
+        });
         if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode('', 'station');
         }
       }
-      dispatchSafe(STATION_LOGO_CHANGED_EVENT, logoDataUrl || BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL);
+      dispatchSafe(STATION_LOGO_CHANGED_EVENT, nextVal);
     } catch (e) {
       console.error('Failed to save station logo', e);
     }

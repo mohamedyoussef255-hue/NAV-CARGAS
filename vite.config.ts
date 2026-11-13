@@ -67,6 +67,7 @@ export default defineConfig({
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',
+        orientation: 'portrait',
         dir: 'rtl',
         lang: 'ar',
         start_url: '/',
@@ -93,6 +94,10 @@ export default defineConfig({
         ],
       },
       workbox: {
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+        navigateFallback: 'index.html',
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
         maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
         runtimeCaching: [
@@ -146,20 +151,6 @@ export default defineConfig({
               expiration: {
                 maxEntries: 20,
                 maxAgeSeconds: 60 * 60 * 24 * 365,
-              },
-              cacheableResponse: {
-                statuses: [0, 200],
-              },
-            },
-          },
-          {
-            urlPattern: /^https:\/\/cdn\.tailwindcss\.com\/.*/i,
-            handler: 'StaleWhileRevalidate',
-            options: {
-              cacheName: 'tailwind-cdn-cache',
-              expiration: {
-                maxEntries: 10,
-                maxAgeSeconds: 60 * 60 * 24 * 30,
               },
               cacheableResponse: {
                 statuses: [0, 200],

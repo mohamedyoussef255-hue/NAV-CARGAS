@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>محطات كارجاس (الأقرب لك دائماً)</title>
     <meta name="description" content="الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين" />
     <meta name="theme-color" content="#0f172a" />
@@ -16,27 +16,13 @@
     <meta property="og:description" content="الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            fontFamily: {
-              cairo: ['Cairo', 'sans-serif'],
-              sans: ['Cairo', 'sans-serif']
-            }
-          }
-        }
-      }
-    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/index.css" />
   </head>
-  <body class="bg-slate-900 text-slate-100 font-sans antialiased overflow-hidden select-none m-0 p-0 w-full h-full">
-    <div id="app" class="w-full h-full flex flex-col relative overflow-hidden"></div>
+  <body class="bg-slate-900 text-slate-100 font-sans antialiased overflow-hidden select-none m-0 p-0 w-screen h-screen">
+    <div id="app" class="w-screen h-screen flex flex-col relative overflow-hidden"></div>
     <script type="module" src="/src/index.ts"></script>
   </body>
 </html>

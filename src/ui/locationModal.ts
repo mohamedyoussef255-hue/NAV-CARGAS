@@ -1,6 +1,8 @@
 import { LocationService, PREDEFINED_LOCATIONS } from '../services/locationService';
+import { StationStorage } from '../services/stationStorage';
 import { SoundService } from '../services/soundService';
 import { ToastService } from '../services/toastService';
+import { normalizeArabicSearch } from '../utils/arabicSearch';
 
 interface NominatimResult {
   display_name: string;
@@ -287,6 +289,49 @@ export class LocationModalComponent {
       this.searchQuery = query;
       if (!query) return;
 
+      const buildOfflineMatches = (): NominatimResult[] => {
+        const qNorm = normalizeArabicSearch(query);
+        const tokens = qNorm.split(/\s+/).filter(Boolean);
+        const results: NominatimResult[] = [];
+
+        for (const preset of PREDEFINED_LOCATIONS) {
+          const hay = normalizeArabicSearch(`${preset.name} ${preset.governorate} ${preset.description}`);
+          if (tokens.every((t) => hay.includes(t))) {
+            results.push({
+              display_name: `${preset.governorate} - ${preset.name} (${preset.description})`,
+              lat: String(preset.lat),
+              lon: String(preset.lng),
+            });
+          }
+        }
+
+        const stations = StationStorage.getStations();
+        for (const st of stations) {
+          if (results.length >= 8) break;
+          const hay = normalizeArabicSearch(`${st.name} ${st.governorate} ${st.city || ''} ${st.address || ''}`);
+          if (tokens.every((t) => hay.includes(t))) {
+            results.push({
+              display_name: `قرب محطة ${st.name} (${st.governorate}${st.city ? ` - ${st.city}` : ''})`,
+              lat: String(st.lat),
+              lon: String(st.lng),
+            });
+          }
+        }
+        return results;
+      };
+
+      // Strictly skip external Nominatim network request when offline
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        this.searchResults = buildOfflineMatches();
+        if (this.searchResults.length === 0) {
+          ToastService.show('أنت في وضع الأوفلاين: اختر منطقتك من القائمة أو انقر على الخريطة.', 'info');
+        } else {
+          ToastService.show(`تم العثور على ${this.searchResults.length} موقع مطابق من قاعدة البيانات المحلية (أوفلاين).`, 'info', 3000);
+        }
+        this.render();
+        return;
+      }
+
       this.isSearching = true;
       this.render();
       try {
@@ -294,12 +339,13 @@ export class LocationModalComponent {
         const resp = await fetch(url);
         if (!resp.ok) throw new Error('Network error');
         const data = (await resp.json()) as NominatimResult[];
-        this.searchResults = data;
-        if (data.length === 0) {
+        this.searchResults = data.length > 0 ? data : buildOfflineMatches();
+        if (this.searchResults.length === 0) {
           ToastService.show('لم يتم العثور على نتائج مطابقة في مصر، جرب كتابة اسم الحي أو الشارع بشكل أبسط.', 'info');
         }
       } catch {
-        ToastService.show('تعذر الاتصال بخدمة البحث عن العناوين حالياً. يمكنك اختيار المنطقة من القائمة أو النقر على الخريطة.', 'warning');
+        this.searchResults = buildOfflineMatches();
+        ToastService.show('تعذر الاتصال بخدمة العناوين؛ تم البحث محلياً أوفلاين أو يمكنك النقر على الخريطة.', 'warning');
       } finally {
         this.isSearching = false;
         this.render();
