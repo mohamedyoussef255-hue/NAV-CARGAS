@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#064e3b"/>
+    </linearGradient>
+    <linearGradient id="pinGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="flameGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fde047"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)"/>
+  <circle cx="256" cy="256" r="205" fill="none" stroke="#10b981" stroke-opacity="0.28" stroke-width="8"/>
+  <!-- Location Pin -->
+  <path d="M256 88c-79.5 0-144 64.5-144 144 0 98 144 196 144 196s144-98 144-196c0-79.5-64.5-144-144-144z" fill="url(#pinGrad)" stroke="#ecfdf5" stroke-width="10"/>
+  <!-- Inner Navy Badge -->
+  <circle cx="256" cy="226" r="82" fill="#0f172a" stroke="#34d399" stroke-width="6"/>
+  <!-- CNG Gas Flame -->
+  <path d="M256 164c0 0-38 38-38 72a38 38 0 0 0 76 0c0-20-12-40-22-52-2 10-8 16-14 16 4-14 4-24-2-36z" fill="url(#flameGrad)"/>
+  <circle cx="256" cy="242" r="14" fill="#fef08a"/>
+</svg>
