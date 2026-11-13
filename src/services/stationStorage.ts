@@ -64,6 +64,7 @@ function computeStationsSignature(list: Station[]): string {
 export class StationStorage {
   private static memoryStations: Station[] | null = null;
   private static idbWriteQueue: Promise<unknown> = Promise.resolve();
+  private static sourceWriteQueue: Promise<unknown> = Promise.resolve();
 
   private static enqueueIdbWrite(task: () => Promise<void>): void {
     this.idbWriteQueue = this.idbWriteQueue
@@ -71,6 +72,15 @@ export class StationStorage {
       .catch((err) => {
         console.warn('IndexedDB write failed cleanly:', err);
       });
+  }
+
+  private static enqueueSourceWrite<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.sourceWriteQueue.then(() => task());
+    this.sourceWriteQueue = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
   }
 
   static normalizeStation(raw: Station, fallbackIndex = 0): Station {
@@ -214,20 +224,20 @@ export class StationStorage {
           lsUpdatedAt > (idbUpdatedAt || 0) ||
           (lsUpdatedAt === 0 && !idbUpdatedAt && lsStations.length > idbStations.length));
 
-      const syncDevEditsToSourceIfNeeded = (loaded: Station[]) => {
+      const syncDevEditsToSourceIfNeeded = async (loaded: Station[]) => {
         if (!isDev || typeof navigator === 'undefined' || !navigator.onLine) return;
         const loadedSig = computeStationsSignature(loaded);
         if (loaded.length > 0 && loadedSig !== bundledSignature) {
-          void this.saveStationsToSourceCode(loaded);
+          await this.saveStationsToSourceCode(loaded);
         }
         try {
           const customAppLogo = localStorage.getItem(STORAGE_KEY_APP_LOGO);
           if (customAppLogo && customAppLogo !== BAKED_APP_LOGO) {
-            void this.saveLogoToSourceCode(customAppLogo, 'app');
+            await this.saveLogoToSourceCode(customAppLogo, 'app');
           }
           const customStationLogo = localStorage.getItem(STORAGE_KEY_STATION_LOGO);
           if (customStationLogo && customStationLogo !== BAKED_STATION_LOGO) {
-            void this.saveLogoToSourceCode(customStationLogo, 'station');
+            await this.saveLogoToSourceCode(customStationLogo, 'station');
           }
         } catch {
           // ignore
@@ -245,7 +255,7 @@ export class StationStorage {
           await StationDb.setMeta(META_KEY_UPDATED_AT, syncTs);
           await StationDb.setMeta(META_KEY_BUNDLED_SIG, bundledSignature);
         });
-        syncDevEditsToSourceIfNeeded(sanitized);
+        void syncDevEditsToSourceIfNeeded(sanitized);
         dispatchSafe(STATIONS_UPDATED_EVENT, sanitized);
         return sanitized;
       }
@@ -263,7 +273,7 @@ export class StationStorage {
         } catch {
           // ignore
         }
-        syncDevEditsToSourceIfNeeded(sanitized);
+        void syncDevEditsToSourceIfNeeded(sanitized);
         dispatchSafe(STATIONS_UPDATED_EVENT, sanitized);
         return sanitized;
       }
@@ -399,56 +409,60 @@ export class StationStorage {
   }
 
   // Directly writes stations array into the source code file (src/data/defaultStations.ts) via API
-  static async saveStationsToSourceCode(stations?: Station[]): Promise<{ success: boolean; count: number; message: string }> {
+  static saveStationsToSourceCode(stations?: Station[]): Promise<{ success: boolean; count: number; message: string }> {
     const list = stations ?? this.getStations();
-    try {
-      const response = await fetch('/api/save-stations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stations: list }),
-      });
-      if (!response.ok) {
-        throw new Error(`Server returned HTTP ${response.status}`);
+    return this.enqueueSourceWrite(async () => {
+      try {
+        const response = await fetch('/api/save-stations', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ stations: list }),
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        return {
+          success: true,
+          count: list.length,
+          message: data.message || `تم حفظ ${list.length} محطة في الكود المصدري بنجاح`,
+        };
+      } catch (e: any) {
+        console.warn('Direct source code write via API failed:', e);
+        return {
+          success: false,
+          count: list.length,
+          message: e.message || 'تعذر الاتصال بخادم الحفظ التلقائي',
+        };
       }
-      const data = await response.json();
-      return {
-        success: true,
-        count: list.length,
-        message: data.message || `تم حفظ ${list.length} محطة في الكود المصدري بنجاح`,
-      };
-    } catch (e: any) {
-      console.warn('Direct source code write via API failed:', e);
-      return {
-        success: false,
-        count: list.length,
-        message: e.message || 'تعذر الاتصال بخادم الحفظ التلقائي',
-      };
-    }
+    });
   }
 
   // Directly writes custom logo into the source code file (src/assets/cargasLogo.ts) via API
-  static async saveLogoToSourceCode(logoDataUrl: string, type: 'app' | 'station' = 'app'): Promise<{ success: boolean; message: string }> {
-    try {
-      const response = await fetch('/api/save-logo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logoDataUrl, type }),
-      });
-      if (!response.ok) {
-        throw new Error(`Server returned HTTP ${response.status}`);
+  static saveLogoToSourceCode(logoDataUrl: string, type: 'app' | 'station' = 'app'): Promise<{ success: boolean; message: string }> {
+    return this.enqueueSourceWrite(async () => {
+      try {
+        const response = await fetch('/api/save-logo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ logoDataUrl, type }),
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        return {
+          success: true,
+          message: data.message || 'تم حفظ الشعار في الكود المصدري بنجاح',
+        };
+      } catch (e: any) {
+        console.warn('Direct logo save via API failed:', e);
+        return {
+          success: false,
+          message: e.message || 'تعذر حفظ الشعار في الكود المصدري',
+        };
       }
-      const data = await response.json();
-      return {
-        success: true,
-        message: data.message || 'تم حفظ الشعار في الكود المصدري بنجاح',
-      };
-    } catch (e: any) {
-      console.warn('Direct logo save via API failed:', e);
-      return {
-        success: false,
-        message: e.message || 'تعذر حفظ الشعار في الكود المصدري',
-      };
-    }
+    });
   }
 
   // Add a single station (normalizes coordinates & returns the stored Station)
@@ -517,16 +531,16 @@ export class StationStorage {
     return BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
   }
 
-  static saveAppLogo(logoDataUrl: string | null): void {
+  static saveAppLogo(logoDataUrl: string | null, options?: { skipSourceSync?: boolean }): void {
     try {
       if (logoDataUrl) {
         localStorage.setItem(STORAGE_KEY_APP_LOGO, logoDataUrl);
-        if (isDevEnvironment()) {
+        if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode(logoDataUrl, 'app');
         }
       } else {
         localStorage.removeItem(STORAGE_KEY_APP_LOGO);
-        if (isDevEnvironment()) {
+        if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode('', 'app');
         }
       }
@@ -560,16 +574,16 @@ export class StationStorage {
     return BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
   }
 
-  static saveStationLogo(logoDataUrl: string | null): void {
+  static saveStationLogo(logoDataUrl: string | null, options?: { skipSourceSync?: boolean }): void {
     try {
       if (logoDataUrl) {
         localStorage.setItem(STORAGE_KEY_STATION_LOGO, logoDataUrl);
-        if (isDevEnvironment()) {
+        if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode(logoDataUrl, 'station');
         }
       } else {
         localStorage.removeItem(STORAGE_KEY_STATION_LOGO);
-        if (isDevEnvironment()) {
+        if (isDevEnvironment() && !options?.skipSourceSync) {
           void this.saveLogoToSourceCode('', 'station');
         }
       }

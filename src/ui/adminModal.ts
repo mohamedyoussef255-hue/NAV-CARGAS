@@ -1865,7 +1865,7 @@ export class AdminModalComponent {
         const reader = new FileReader();
         reader.onload = async () => {
           const dataUrl = reader.result as string;
-          StationStorage.saveAppLogo(dataUrl);
+          StationStorage.saveAppLogo(dataUrl, { skipSourceSync: true });
           SoundService.playChime('start');
           const res = await StationStorage.saveLogoToSourceCode(dataUrl, 'app');
           if (res.success) {
@@ -1893,7 +1893,7 @@ export class AdminModalComponent {
     });
 
     this.container.querySelector('#btn-remove-app-logo')?.addEventListener('click', async () => {
-      StationStorage.saveAppLogo(null);
+      StationStorage.saveAppLogo(null, { skipSourceSync: true });
       SoundService.playChime('turn');
       await StationStorage.saveLogoToSourceCode('', 'app');
       ToastService.show('تمت استعادة شعار التطبيق الافتراضي.', 'info');
@@ -1912,7 +1912,7 @@ export class AdminModalComponent {
         const reader = new FileReader();
         reader.onload = async () => {
           const dataUrl = reader.result as string;
-          StationStorage.saveStationLogo(dataUrl);
+          StationStorage.saveStationLogo(dataUrl, { skipSourceSync: true });
           SoundService.playChime('start');
           const res = await StationStorage.saveLogoToSourceCode(dataUrl, 'station');
           if (res.success) {
@@ -1940,7 +1940,7 @@ export class AdminModalComponent {
     });
 
     this.container.querySelector('#btn-remove-station-logo')?.addEventListener('click', async () => {
-      StationStorage.saveStationLogo(null);
+      StationStorage.saveStationLogo(null, { skipSourceSync: true });
       SoundService.playChime('turn');
       await StationStorage.saveLogoToSourceCode('', 'station');
       ToastService.show('تمت استعادة شعار دبابيس المحطات الافتراضي.', 'info');
