@@ -63,6 +63,7 @@ export class AdminModalComponent {
   private onDataChangedCallback: (focusedStation?: Station) => void;
   private onLocateStationCallback?: (station: Station) => void;
   private onPickCoordsOnMapCallback?: (cb: (lat: number, lng: number) => void) => void;
+  private onPreviewSplashCallback?: () => void;
   private pendingParsedResult: ParseResult | null = null;
   private lastUploadedFile: File | null = null;
   private columnMappingOverride: ColumnMappingOverride = {};
@@ -79,12 +80,14 @@ export class AdminModalComponent {
       onDataChanged: (focusedStation?: Station) => void;
       onLocateStation?: (station: Station) => void;
       onPickCoordsOnMap?: (cb: (lat: number, lng: number) => void) => void;
+      onPreviewSplash?: () => void;
     }
   ) {
     this.container = container;
     this.onDataChangedCallback = handlers.onDataChanged;
     this.onLocateStationCallback = handlers.onLocateStation;
     this.onPickCoordsOnMapCallback = handlers.onPickCoordsOnMap;
+    this.onPreviewSplashCallback = handlers.onPreviewSplash;
   }
 
   show(preferredTab?: 'upload' | 'manage' | 'add' | 'branding' | 'settings' | 'source'): void {
@@ -128,7 +131,7 @@ export class AdminModalComponent {
 
     this.container.classList.remove('hidden');
     this.container.innerHTML = `
-      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1500] overflow-y-auto overscroll-contain flex items-center justify-center p-4" style="height: var(--vvh, 100dvh);">
+      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[9999] overflow-y-auto overscroll-contain flex items-center justify-center p-4" style="height: var(--vvh, 100dvh);">
         <div class="glass-card w-full max-w-sm rounded-3xl p-6 shadow-2xl border text-center my-auto animate-fade-in" id="auth-box">
           
           <div class="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-400 mx-auto flex items-center justify-center text-2xl mb-4 border border-amber-500/30">
@@ -300,7 +303,7 @@ export class AdminModalComponent {
     this.stations = StationStorage.getStations();
 
     this.container.innerHTML = `
-      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1500] flex items-center justify-center p-2 sm:p-4">
+      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[9999] flex items-center justify-center p-2 sm:p-4">
         <div class="glass-card w-full max-w-4xl h-[92vh] rounded-3xl flex flex-col shadow-2xl border overflow-hidden animate-scale-up">
           
           <!-- Top Header -->
@@ -1134,6 +1137,7 @@ export class AdminModalComponent {
   private renderBrandingTab(): string {
     const appLogo = StationStorage.getAppLogo();
     const stationLogo = StationStorage.getStationLogo();
+    const cfg = AppConfigService.getConfig();
 
     return `
       <div class="max-w-2xl mx-auto space-y-6 text-right">
@@ -1253,6 +1257,88 @@ export class AdminModalComponent {
           </div>
 
         </div>
+
+        <!-- Splash Screen Messages Editor (App Logo & Station Logo) -->
+        <form id="splash-messages-form" class="w-full p-4 rounded-3xl bg-slate-900/75 border border-emerald-500/35 text-right space-y-4">
+          <div class="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2.5">
+            <div>
+              <div class="text-xs sm:text-sm font-black text-emerald-400 flex items-center gap-1.5">
+                <span>💬</span>
+                <span>رسائل شاشة البداية أسفل اللوجوهات عند تشغيل التطبيق (10 ثوانٍ)</span>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-0.5">
+                عدّل العناوين والرسائل التي تظهر أسفل لوجو التطبيق (أول 7 ثوانٍ) ولوجو المحطات (آخر 3 ثوانٍ) ثم اعتمدها في الكود المصدري.
+              </p>
+            </div>
+            <button
+              type="button"
+              id="btn-preview-splash-now"
+              class="bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 text-xs font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 shrink-0"
+            >
+              <span>👁️</span>
+              <span>معاينة شاشة البداية الآن</span>
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <!-- Stage 1: App Logo Messages -->
+            <div class="p-3.5 rounded-2xl bg-slate-950/60 border border-emerald-500/25 space-y-2.5">
+              <div class="text-[11px] font-black text-emerald-300 flex items-center gap-1.5">
+                <span>1️⃣</span>
+                <span>الرسائل أسفل لوجو التطبيق (0 – 7 ثوانٍ)</span>
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">العنوان أسفل لوجو التطبيق</label>
+                <input type="text" id="branding-splash-app-title" value="${escapeHtml(cfg.splashAppTitle)}" placeholder="مثال: محطات كارجاس" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2 text-white font-cairo outline-none" />
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">الرسالة الترحيبية أسفل لوجو التطبيق</label>
+                <textarea id="branding-splash-app-message" rows="2" placeholder="مثال: الأقرب لك دائماً" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2 text-white font-cairo outline-none resize-none">${escapeHtml(cfg.splashAppMessage)}</textarea>
+              </div>
+              <div>
+                <label class="block text-slate-400 font-bold mb-1 text-[11px]">رسالة شريط التحميل (المرحلة الأولى)</label>
+                <input type="text" id="branding-splash-app-loading" value="${escapeHtml(cfg.splashAppLoadingText)}" placeholder="جارٍ تهيئة الخريطة وقاعدة المحطات..." class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2 text-slate-200 font-cairo outline-none" />
+              </div>
+            </div>
+
+            <!-- Stage 2: Station Logo Messages -->
+            <div class="p-3.5 rounded-2xl bg-slate-950/60 border border-blue-500/25 space-y-2.5">
+              <div class="text-[11px] font-black text-blue-300 flex items-center gap-1.5">
+                <span>2️⃣</span>
+                <span>الرسائل أسفل لوجو المحطات (7 – 10 ثوانٍ)</span>
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">العنوان أسفل لوجو المحطات</label>
+                <input type="text" id="branding-splash-station-title" value="${escapeHtml(cfg.splashStationTitle)}" placeholder="مثال: محطات غاز كارجاس" class="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-xl p-2 text-white font-cairo outline-none" />
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">الرسالة أسفل لوجو المحطات</label>
+                <textarea id="branding-splash-station-message" rows="2" placeholder="مثال: الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين" class="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-xl p-2 text-white font-cairo outline-none resize-none">${escapeHtml(cfg.splashStationMessage)}</textarea>
+              </div>
+              <div>
+                <label class="block text-slate-400 font-bold mb-1 text-[11px]">رسالة شريط التحميل (المرحلة الثانية)</label>
+                <input type="text" id="branding-splash-station-loading" value="${escapeHtml(cfg.splashStationLoadingText)}" placeholder="جارٍ تحميل محطات كارجاس على الخريطة..." class="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-xl p-2 text-slate-200 font-cairo outline-none" />
+              </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2.5 flex-wrap pt-1">
+            <button
+              type="submit"
+              id="btn-save-splash-messages-source"
+              class="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black py-2.5 px-4 rounded-xl text-xs shadow-lg transition-all active:scale-95"
+            >
+              💾 حفظ واعتماد رسائل اللوجوهات في الكود المصدري
+            </button>
+            <button
+              type="button"
+              id="btn-reset-splash-messages"
+              class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 font-bold py-2.5 px-3.5 rounded-xl text-xs transition-all"
+            >
+              ↺ استعادة الافتراضي
+            </button>
+          </div>
+        </form>
 
         <!-- Unified Logo Source Code Baking Box -->
         <div class="w-full p-4 rounded-2xl bg-slate-900/80 border border-emerald-500/40 text-right space-y-2">
@@ -1376,6 +1462,42 @@ export class AdminModalComponent {
             <div>
               <label class="block text-slate-300 font-bold mb-1">الوصف أسفل العنوان وفي المتصفح</label>
               <input type="text" id="cfg-app-description" value="${escapeHtml(cfg.appDescription)}" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+            </div>
+          </div>
+
+          <!-- Splash Logo Messages in Settings Tab -->
+          <div class="pt-3 border-t border-white/10 space-y-2.5">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <span class="text-xs font-black text-cyan-300">💬 الرسائل أسفل لوجو التطبيق ولوجو المحطات عند التشغيل:</span>
+              <button type="button" id="btn-preview-splash-from-settings" class="bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all">
+                👁️ معاينة شاشة التشغيل
+              </button>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">عنوان لوجو التطبيق (أول 7 ثوانٍ)</label>
+                <input type="text" id="cfg-splash-app-title" value="${escapeHtml(cfg.splashAppTitle)}" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">الرسالة أسفل لوجو التطبيق</label>
+                <input type="text" id="cfg-splash-app-message" value="${escapeHtml(cfg.splashAppMessage)}" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">عنوان لوجو المحطات (آخر 3 ثوانٍ)</label>
+                <input type="text" id="cfg-splash-station-title" value="${escapeHtml(cfg.splashStationTitle)}" class="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">الرسالة أسفل لوجو المحطات</label>
+                <input type="text" id="cfg-splash-station-message" value="${escapeHtml(cfg.splashStationMessage)}" class="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-xl p-2.5 text-white font-cairo outline-none" />
+              </div>
+              <div>
+                <label class="block text-slate-400 font-bold mb-1 text-[11px]">رسالة التحميل (المرحلة 1)</label>
+                <input type="text" id="cfg-splash-app-loading" value="${escapeHtml(cfg.splashAppLoadingText)}" class="w-full bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl p-2 text-slate-200 font-cairo outline-none" />
+              </div>
+              <div>
+                <label class="block text-slate-400 font-bold mb-1 text-[11px]">رسالة التحميل (المرحلة 2)</label>
+                <input type="text" id="cfg-splash-station-loading" value="${escapeHtml(cfg.splashStationLoadingText)}" class="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-xl p-2 text-slate-200 font-cairo outline-none" />
+              </div>
             </div>
           </div>
         </div>
@@ -2256,6 +2378,94 @@ export class AdminModalComponent {
       this.renderDashboard();
     });
 
+    // Splash screen messages form inside Branding tab
+    const saveBrandingSplashMessages = async () => {
+      const splashAppTitle =
+        (this.container.querySelector('#branding-splash-app-title') as HTMLInputElement)?.value.trim() ?? '';
+      const splashAppMessage =
+        (this.container.querySelector('#branding-splash-app-message') as HTMLTextAreaElement)?.value.trim() ?? '';
+      const splashAppLoadingText =
+        (this.container.querySelector('#branding-splash-app-loading') as HTMLInputElement)?.value.trim() ?? '';
+      const splashStationTitle =
+        (this.container.querySelector('#branding-splash-station-title') as HTMLInputElement)?.value.trim() ?? '';
+      const splashStationMessage =
+        (this.container.querySelector('#branding-splash-station-message') as HTMLTextAreaElement)?.value.trim() ?? '';
+      const splashStationLoadingText =
+        (this.container.querySelector('#branding-splash-station-loading') as HTMLInputElement)?.value.trim() ?? '';
+
+      const saved = AppConfigService.saveConfig(
+        {
+          splashAppTitle,
+          splashAppMessage,
+          splashAppLoadingText,
+          splashStationTitle,
+          splashStationMessage,
+          splashStationLoadingText,
+        },
+        { skipSourceSync: true }
+      );
+
+      const res = await AppConfigService.saveConfigToSourceCode(saved);
+      SoundService.playChime('start');
+      if (res.success) {
+        ToastService.show('✅ تم حفظ واعتماد رسائل اللوجوهات في الكود المصدري (src/config/appConfig.ts) بنجاح!', 'success', 4500);
+      } else {
+        ToastService.show('✅ تم حفظ رسائل شاشة البداية محلياً.', 'success', 3500);
+      }
+      this.renderDashboard();
+    };
+
+    this.container.querySelector('#splash-messages-form')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      await saveBrandingSplashMessages();
+    });
+
+    this.container.querySelector('#btn-preview-splash-now')?.addEventListener('click', () => {
+      SoundService.playChime('click');
+      const splashAppTitle =
+        (this.container.querySelector('#branding-splash-app-title') as HTMLInputElement)?.value.trim() ?? '';
+      const splashAppMessage =
+        (this.container.querySelector('#branding-splash-app-message') as HTMLTextAreaElement)?.value.trim() ?? '';
+      const splashAppLoadingText =
+        (this.container.querySelector('#branding-splash-app-loading') as HTMLInputElement)?.value.trim() ?? '';
+      const splashStationTitle =
+        (this.container.querySelector('#branding-splash-station-title') as HTMLInputElement)?.value.trim() ?? '';
+      const splashStationMessage =
+        (this.container.querySelector('#branding-splash-station-message') as HTMLTextAreaElement)?.value.trim() ?? '';
+      const splashStationLoadingText =
+        (this.container.querySelector('#branding-splash-station-loading') as HTMLInputElement)?.value.trim() ?? '';
+      AppConfigService.saveConfig(
+        {
+          splashAppTitle,
+          splashAppMessage,
+          splashAppLoadingText,
+          splashStationTitle,
+          splashStationMessage,
+          splashStationLoadingText,
+        },
+        { skipSourceSync: true }
+      );
+      this.onPreviewSplashCallback?.();
+    });
+
+    this.container.querySelector('#btn-reset-splash-messages')?.addEventListener('click', async () => {
+      const saved = AppConfigService.saveConfig(
+        {
+          splashAppTitle: DEFAULT_APP_CONFIG.splashAppTitle,
+          splashAppMessage: DEFAULT_APP_CONFIG.splashAppMessage,
+          splashAppLoadingText: DEFAULT_APP_CONFIG.splashAppLoadingText,
+          splashStationTitle: DEFAULT_APP_CONFIG.splashStationTitle,
+          splashStationMessage: DEFAULT_APP_CONFIG.splashStationMessage,
+          splashStationLoadingText: DEFAULT_APP_CONFIG.splashStationLoadingText,
+        },
+        { skipSourceSync: true }
+      );
+      await AppConfigService.saveConfigToSourceCode(saved);
+      SoundService.playChime('turn');
+      ToastService.show('تمت استعادة رسائل شاشة البداية الافتراضية واعتمادها.', 'info');
+      this.renderDashboard();
+    });
+
     // Tab 5 (Settings) Events: App Name, Password, Icon Visibility & Commit All
     const collectIconsFromDom = (): UserIconsVisibility => {
       const icons = { ...AppConfigService.getConfig().userIcons };
@@ -2309,6 +2519,27 @@ export class AdminModalComponent {
       setAllIconCheckboxes(() => false);
     });
 
+    const readSettingsSplashFields = () => ({
+      splashAppTitle:
+        (this.container.querySelector('#cfg-splash-app-title') as HTMLInputElement)?.value.trim() ?? '',
+      splashAppMessage:
+        (this.container.querySelector('#cfg-splash-app-message') as HTMLInputElement)?.value.trim() ?? '',
+      splashAppLoadingText:
+        (this.container.querySelector('#cfg-splash-app-loading') as HTMLInputElement)?.value.trim() ?? '',
+      splashStationTitle:
+        (this.container.querySelector('#cfg-splash-station-title') as HTMLInputElement)?.value.trim() ?? '',
+      splashStationMessage:
+        (this.container.querySelector('#cfg-splash-station-message') as HTMLInputElement)?.value.trim() ?? '',
+      splashStationLoadingText:
+        (this.container.querySelector('#cfg-splash-station-loading') as HTMLInputElement)?.value.trim() ?? '',
+    });
+
+    this.container.querySelector('#btn-preview-splash-from-settings')?.addEventListener('click', () => {
+      SoundService.playChime('click');
+      AppConfigService.saveConfig(readSettingsSplashFields(), { skipSourceSync: true });
+      this.onPreviewSplashCallback?.();
+    });
+
     const saveSettingsForm = async (alsoCommitAll: boolean) => {
       const appName =
         (this.container.querySelector('#cfg-app-name') as HTMLInputElement)?.value.trim() ||
@@ -2329,6 +2560,7 @@ export class AdminModalComponent {
         return;
       }
 
+      const splashFields = readSettingsSplashFields();
       const userIcons = collectIconsFromDom();
       const saved = AppConfigService.saveConfig(
         {
@@ -2336,6 +2568,7 @@ export class AdminModalComponent {
           appShortName,
           appSubtitle,
           appDescription,
+          ...splashFields,
           adminPassword,
           mapNightModeDisabled: true,
           userIcons,
@@ -2344,7 +2577,7 @@ export class AdminModalComponent {
       );
 
       if (alsoCommitAll) {
-        ToastService.show('جارٍ اعتماد كافة التعديلات (المحطات + الشعارات + الإعدادات) لـ Vercel...', 'info', 2500);
+        ToastService.show('جارٍ اعتماد كافة التعديلات (المحطات + الشعارات + الرسائل + الإعدادات) لـ Vercel...', 'info', 2500);
         const res = await StationStorage.commitAllEditsToSourceCode();
         if (res.success) {
           SoundService.playChime('start');
@@ -2356,7 +2589,7 @@ export class AdminModalComponent {
         const res = await AppConfigService.saveConfigToSourceCode(saved);
         if (res.success) {
           SoundService.playChime('start');
-          ToastService.show('✅ تم حفظ وتثبيت اسم التطبيق وكلمة السر وإعدادات الأيقونات في الكود المصدري بنجاح!', 'success', 4500);
+          ToastService.show('✅ تم حفظ وتثبيت اسم التطبيق ورسائل الشعارات وكلمة السر وإعدادات الأيقونات في الكود المصدري بنجاح!', 'success', 4500);
         } else {
           SoundService.playChime('start');
           ToastService.show('تم تطبيق الإعدادات وحفظها محلياً.', 'success');

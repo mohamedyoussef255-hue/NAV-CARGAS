@@ -40,6 +40,7 @@ class CargasApp {
   private lastAutoCenteredLoc: { lat: number; lng: number } | null = null;
   private selectedStation: Station | null = null;
   private isNavigating = false;
+  private splashTimers: number[] = [];
 
   constructor() {
     initWebViewNavigationGuard();
@@ -69,8 +70,8 @@ class CargasApp {
               </div>
             </div>
             <div class="space-y-1 px-2">
-              <h2 id="splash-app-title" class="text-2xl sm:text-3xl font-black text-white tracking-tight">${escapeHtml(initialConfig.appName)}</h2>
-              ${initialConfig.appSubtitle ? `<p class="text-sm font-bold text-emerald-300">${escapeHtml(initialConfig.appSubtitle)}</p>` : ''}
+              <h2 id="splash-app-title" class="text-2xl sm:text-3xl font-black text-white tracking-tight ${initialConfig.splashAppTitle ? '' : 'hidden'}">${escapeHtml(initialConfig.splashAppTitle)}</h2>
+              <p id="splash-app-message" class="text-sm font-bold text-emerald-300 leading-relaxed ${initialConfig.splashAppMessage ? '' : 'hidden'}">${escapeHtml(initialConfig.splashAppMessage)}</p>
             </div>
           </div>
 
@@ -82,8 +83,8 @@ class CargasApp {
               </div>
             </div>
             <div class="space-y-1 px-2">
-              <div class="text-xl sm:text-2xl font-black text-emerald-300">محطات غاز كارجاس</div>
-              <p class="text-xs sm:text-sm font-bold text-slate-300">${escapeHtml(initialConfig.appDescription)}</p>
+              <div id="splash-station-title" class="text-xl sm:text-2xl font-black text-emerald-300 ${initialConfig.splashStationTitle ? '' : 'hidden'}">${escapeHtml(initialConfig.splashStationTitle)}</div>
+              <p id="splash-station-message" class="text-xs sm:text-sm font-bold text-slate-300 leading-relaxed ${initialConfig.splashStationMessage ? '' : 'hidden'}">${escapeHtml(initialConfig.splashStationMessage)}</p>
             </div>
           </div>
 
@@ -94,7 +95,7 @@ class CargasApp {
           <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
             <div class="splash-progress-bar h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 rounded-full"></div>
           </div>
-          <div id="splash-status-label" class="text-[11px] font-bold text-slate-400">جارٍ تهيئة الخريطة وقاعدة المحطات...</div>
+          <div id="splash-status-label" class="text-[11px] font-bold text-slate-400">${escapeHtml(initialConfig.splashAppLoadingText)}</div>
         </div>
       </div>
 
@@ -330,6 +331,9 @@ class CargasApp {
         },
         onPickCoordsOnMap: (cb) => {
           this.map.enablePickLocationOnMap((lat, lng) => cb(lat, lng));
+        },
+        onPreviewSplash: () => {
+          this.previewSplashScreen();
         },
       });
 
@@ -591,6 +595,24 @@ class CargasApp {
       this.header.applyConfig(headerContainer, cfg);
     }
 
+    const syncSplashText = (id: string, val: string) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = val;
+      el.classList.toggle('hidden', !val);
+    };
+    syncSplashText('splash-app-title', cfg.splashAppTitle);
+    syncSplashText('splash-app-message', cfg.splashAppMessage);
+    syncSplashText('splash-station-title', cfg.splashStationTitle);
+    syncSplashText('splash-station-message', cfg.splashStationMessage);
+    const statusLabel = document.getElementById('splash-status-label');
+    const stageStationVisible = !document
+      .getElementById('splash-stage-station')
+      ?.classList.contains('splash-stage-hidden');
+    if (statusLabel) {
+      statusLabel.textContent = stageStationVisible ? cfg.splashStationLoadingText : cfg.splashAppLoadingText;
+    }
+
     const icons = cfg.userIcons;
     document.getElementById('btn-current-location-badge')?.classList.toggle('hidden', !icons.locationBadge);
     document.getElementById('map-search-container')?.classList.toggle('hidden', !icons.mapSearch);
@@ -619,7 +641,15 @@ class CargasApp {
     label.textContent = isSatellite ? 'خريطة الشوارع' : 'قمر صناعي';
   }
 
+  private clearSplashTimers(): void {
+    for (const id of this.splashTimers) {
+      window.clearTimeout(id);
+    }
+    this.splashTimers = [];
+  }
+
   private runLaunchSplashSequence(): void {
+    this.clearSplashTimers();
     const splash = document.getElementById('app-splash-screen');
     const stageApp = document.getElementById('splash-stage-app');
     const stageStation = document.getElementById('splash-stage-station');
@@ -627,23 +657,84 @@ class CargasApp {
     if (!splash) return;
 
     // Phase 1: App Logo stays for 7 seconds, then transitions to Cargas Stations Logo for 3 seconds (10s total)
-    setTimeout(() => {
-      stageApp?.classList.add('splash-stage-hidden');
-      stageStation?.classList.remove('splash-stage-hidden');
-      if (statusLabel) {
-        statusLabel.textContent = 'جارٍ تحميل محطات كارجاس على الخريطة...';
-      }
-    }, 7000);
+    this.splashTimers.push(
+      window.setTimeout(() => {
+        if (!splash.isConnected) return;
+        stageApp?.classList.add('splash-stage-hidden');
+        stageStation?.classList.remove('splash-stage-hidden');
+        if (statusLabel) {
+          statusLabel.textContent = AppConfigService.getConfig().splashStationLoadingText;
+        }
+      }, 7000)
+    );
 
     // Phase 2: Reveal the interactive map after 10 seconds total (7s + 3s)
-    setTimeout(() => {
-      splash.classList.add('splash-fade-out');
-      this.map?.invalidateSize();
-      setTimeout(() => {
-        splash.remove();
+    this.splashTimers.push(
+      window.setTimeout(() => {
+        if (!splash.isConnected) return;
+        splash.classList.add('splash-fade-out');
         this.map?.invalidateSize();
-      }, 420);
-    }, 10000);
+        this.splashTimers.push(
+          window.setTimeout(() => {
+            splash.remove();
+            this.map?.invalidateSize();
+          }, 420)
+        );
+      }, 10000)
+    );
+  }
+
+  private previewSplashScreen(): void {
+    this.clearSplashTimers();
+    document.getElementById('app-splash-screen')?.remove();
+    const cfg = AppConfigService.getConfig();
+    const appLogo = StationStorage.getAppLogo();
+    const stationLogo = StationStorage.getStationLogo();
+    const overlay = document.createElement('div');
+    overlay.id = 'app-splash-screen';
+    overlay.setAttribute('dir', 'rtl');
+    overlay.style.zIndex = '99999';
+    overlay.innerHTML = `
+      <button type="button" id="btn-close-splash-preview" class="absolute top-4 left-4 bg-slate-800/90 hover:bg-slate-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg transition-all">
+        ✕ إنهاء المعاينة
+      </button>
+      <div class="relative w-full max-w-sm flex flex-col items-center justify-center min-h-[280px]">
+        <div id="splash-stage-app" class="splash-stage flex flex-col items-center justify-center text-center gap-4 w-full">
+          <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-slate-900/90 border-2 border-emerald-400/60 shadow-2xl shadow-emerald-500/20 p-3.5 overflow-hidden flex items-center justify-center">
+            <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
+              <img src="${appLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
+            </div>
+          </div>
+          <div class="space-y-1 px-2">
+            <h2 id="splash-app-title" class="text-2xl sm:text-3xl font-black text-white tracking-tight ${cfg.splashAppTitle ? '' : 'hidden'}">${escapeHtml(cfg.splashAppTitle)}</h2>
+            <p id="splash-app-message" class="text-sm font-bold text-emerald-300 leading-relaxed ${cfg.splashAppMessage ? '' : 'hidden'}">${escapeHtml(cfg.splashAppMessage)}</p>
+          </div>
+        </div>
+        <div id="splash-stage-station" class="splash-stage splash-stage-hidden absolute inset-0 flex flex-col items-center justify-center text-center gap-4 w-full">
+          <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-gradient-to-br from-emerald-950 to-slate-900 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/30 p-3.5 overflow-hidden flex items-center justify-center">
+            <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
+              <img src="${stationLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Cargas Station Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
+            </div>
+          </div>
+          <div class="space-y-1 px-2">
+            <div id="splash-station-title" class="text-xl sm:text-2xl font-black text-emerald-300 ${cfg.splashStationTitle ? '' : 'hidden'}">${escapeHtml(cfg.splashStationTitle)}</div>
+            <p id="splash-station-message" class="text-xs sm:text-sm font-bold text-slate-300 leading-relaxed ${cfg.splashStationMessage ? '' : 'hidden'}">${escapeHtml(cfg.splashStationMessage)}</p>
+          </div>
+        </div>
+      </div>
+      <div class="w-56 sm:w-64 mt-8 space-y-2 text-center">
+        <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+          <div class="splash-progress-bar h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 rounded-full"></div>
+        </div>
+        <div id="splash-status-label" class="text-[11px] font-bold text-slate-400">${escapeHtml(cfg.splashAppLoadingText)}</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#btn-close-splash-preview')?.addEventListener('click', () => {
+      this.clearSplashTimers();
+      overlay.remove();
+    });
+    this.runLaunchSplashSequence();
   }
 
   private renderMapStations(): void {

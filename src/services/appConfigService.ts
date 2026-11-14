@@ -41,6 +41,36 @@ export function normalizeConfig(raw?: Partial<AppConfig> | null): AppConfig {
       typeof raw?.appDescription === 'string' && raw.appDescription.trim()
         ? raw.appDescription.trim()
         : DEFAULT_APP_CONFIG.appDescription,
+    splashAppTitle:
+      typeof raw?.splashAppTitle === 'string'
+        ? raw.splashAppTitle.trim()
+        : typeof raw?.appName === 'string' && raw.appName.trim()
+          ? raw.appName.trim()
+          : DEFAULT_APP_CONFIG.splashAppTitle,
+    splashAppMessage:
+      typeof raw?.splashAppMessage === 'string'
+        ? raw.splashAppMessage.trim()
+        : typeof raw?.appSubtitle === 'string'
+          ? raw.appSubtitle.trim()
+          : DEFAULT_APP_CONFIG.splashAppMessage,
+    splashAppLoadingText:
+      typeof raw?.splashAppLoadingText === 'string'
+        ? raw.splashAppLoadingText.trim()
+        : DEFAULT_APP_CONFIG.splashAppLoadingText,
+    splashStationTitle:
+      typeof raw?.splashStationTitle === 'string'
+        ? raw.splashStationTitle.trim()
+        : DEFAULT_APP_CONFIG.splashStationTitle,
+    splashStationMessage:
+      typeof raw?.splashStationMessage === 'string'
+        ? raw.splashStationMessage.trim()
+        : typeof raw?.appDescription === 'string' && raw.appDescription.trim()
+          ? raw.appDescription.trim()
+          : DEFAULT_APP_CONFIG.splashStationMessage,
+    splashStationLoadingText:
+      typeof raw?.splashStationLoadingText === 'string'
+        ? raw.splashStationLoadingText.trim()
+        : DEFAULT_APP_CONFIG.splashStationLoadingText,
     adminPassword:
       typeof raw?.adminPassword === 'string' && raw.adminPassword.trim().length > 0
         ? raw.adminPassword.trim()
@@ -302,6 +332,12 @@ export interface AppConfig {
   appShortName: string;
   appSubtitle: string;
   appDescription: string;
+  splashAppTitle: string;
+  splashAppMessage: string;
+  splashAppLoadingText: string;
+  splashStationTitle: string;
+  splashStationMessage: string;
+  splashStationLoadingText: string;
   adminPassword: string;
   mapNightModeDisabled: boolean;
   userIcons: UserIconsVisibility;
@@ -328,6 +364,12 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   appShortName: 'كارجاس',
   appSubtitle: 'الأقرب لك دائماً',
   appDescription: 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+  splashAppTitle: 'محطات كارجاس',
+  splashAppMessage: 'الأقرب لك دائماً',
+  splashAppLoadingText: 'جارٍ تهيئة الخريطة وقاعدة المحطات...',
+  splashStationTitle: 'محطات غاز كارجاس',
+  splashStationMessage: 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+  splashStationLoadingText: 'جارٍ تحميل محطات كارجاس على الخريطة...',
   adminPassword: '0000',
   mapNightModeDisabled: true,
   userIcons: { ...DEFAULT_USER_ICONS },

@@ -395,6 +395,26 @@ export default defineConfig({
                       typeof cfg.appDescription === 'string' && cfg.appDescription.trim()
                         ? cfg.appDescription.trim()
                         : 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+                    splashAppTitle:
+                      typeof cfg.splashAppTitle === 'string' ? cfg.splashAppTitle.trim() : 'محطات كارجاس',
+                    splashAppMessage:
+                      typeof cfg.splashAppMessage === 'string' ? cfg.splashAppMessage.trim() : 'الأقرب لك دائماً',
+                    splashAppLoadingText:
+                      typeof cfg.splashAppLoadingText === 'string'
+                        ? cfg.splashAppLoadingText.trim()
+                        : 'جارٍ تهيئة الخريطة وقاعدة المحطات...',
+                    splashStationTitle:
+                      typeof cfg.splashStationTitle === 'string'
+                        ? cfg.splashStationTitle.trim()
+                        : 'محطات غاز كارجاس',
+                    splashStationMessage:
+                      typeof cfg.splashStationMessage === 'string'
+                        ? cfg.splashStationMessage.trim()
+                        : 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+                    splashStationLoadingText:
+                      typeof cfg.splashStationLoadingText === 'string'
+                        ? cfg.splashStationLoadingText.trim()
+                        : 'جارٍ تحميل محطات كارجاس على الخريطة...',
                     adminPassword:
                       typeof cfg.adminPassword === 'string' && cfg.adminPassword.trim()
                         ? cfg.adminPassword.trim()
@@ -439,6 +459,12 @@ export interface AppConfig {
   appShortName: string;
   appSubtitle: string;
   appDescription: string;
+  splashAppTitle: string;
+  splashAppMessage: string;
+  splashAppLoadingText: string;
+  splashStationTitle: string;
+  splashStationMessage: string;
+  splashStationLoadingText: string;
   adminPassword: string;
   mapNightModeDisabled: boolean;
   userIcons: UserIconsVisibility;
@@ -465,6 +491,12 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   appShortName: 'كارجاس',
   appSubtitle: 'الأقرب لك دائماً',
   appDescription: 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+  splashAppTitle: 'محطات كارجاس',
+  splashAppMessage: 'الأقرب لك دائماً',
+  splashAppLoadingText: 'جارٍ تهيئة الخريطة وقاعدة المحطات...',
+  splashStationTitle: 'محطات غاز كارجاس',
+  splashStationMessage: 'الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين',
+  splashStationLoadingText: 'جارٍ تحميل محطات كارجاس على الخريطة...',
   adminPassword: '0000',
   mapNightModeDisabled: true,
   userIcons: { ...DEFAULT_USER_ICONS },
