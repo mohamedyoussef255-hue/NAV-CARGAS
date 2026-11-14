@@ -7,6 +7,7 @@ import { RoutingService } from './services/routingService';
 import { SoundService } from './services/soundService';
 import { ToastService } from './services/toastService';
 import { PwaService } from './services/pwaService';
+import { initWebViewNavigationGuard } from './services/webviewGuard';
 
 import { DEFAULT_CARGAS_LOGO_DATA_URL } from './assets/cargasLogo';
 import { escapeHtml } from './utils/html';
@@ -39,6 +40,7 @@ class CargasApp {
   private isNavigating = false;
 
   constructor() {
+    initWebViewNavigationGuard();
     PwaService.init();
     const initialConfig = AppConfigService.getConfig();
     AppConfigService.applyDocumentBranding(initialConfig);

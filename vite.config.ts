@@ -67,6 +67,8 @@ export default defineConfig({
         theme_color: '#0f172a',
         background_color: '#0f172a',
         display: 'standalone',
+        display_override: ['fullscreen', 'standalone', 'minimal-ui'],
+        prefer_related_applications: false,
         orientation: 'portrait',
         dir: 'rtl',
         lang: 'ar',

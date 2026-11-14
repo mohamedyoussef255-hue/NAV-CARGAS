@@ -51,7 +51,6 @@ export class HeaderComponent {
             class="flex items-center gap-2.5 select-none touch-manipulation group cursor-pointer"
             id="header-logo-trigger"
             role="button"
-            tabindex="0"
             aria-label="${escapeHtml(cfg.appName)}"
             title="${escapeHtml(cfg.appName)}"
           >
@@ -248,6 +247,14 @@ export class HeaderComponent {
       if (logoTrigger) {
         let pointerDownPos: { x: number; y: number } | null = null;
         let lastPointerTapAt = 0;
+        let justOpenedAdminAt = 0;
+
+        const focusAdminPasswordInput = () => {
+          const pwdInput = document.getElementById('admin-password-input') as HTMLInputElement | null;
+          if (!pwdInput) return;
+          pwdInput.focus();
+          pwdInput.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        };
 
         const registerLogoTap = () => {
           this.logoClickCount++;
@@ -265,7 +272,10 @@ export class HeaderComponent {
 
           if (this.logoClickCount >= 5) {
             this.logoClickCount = 0;
+            justOpenedAdminAt = performance.now();
+            (document.activeElement as HTMLElement | null)?.blur?.();
             this.onTriggerAdminCallback?.();
+            focusAdminPasswordInput();
             try {
               SoundService.playChime('start');
             } catch {
@@ -300,6 +310,13 @@ export class HeaderComponent {
         });
 
         logoTrigger.addEventListener('click', (e) => {
+          // If pointerup just opened the admin password modal, reinforce focus inside this genuine click gesture so mobile WebView opens the keyboard
+          if (performance.now() - justOpenedAdminAt < 650) {
+            e.preventDefault();
+            e.stopPropagation();
+            focusAdminPasswordInput();
+            return;
+          }
           // Deduplicate trailing click after pointerup, while still supporting accessibility/keyboard clicks (detail === 0)
           if (e.detail !== 0 && performance.now() - lastPointerTapAt < 450) {
             return;

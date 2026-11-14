@@ -1,4 +1,5 @@
 import { registerSW } from 'virtual:pwa-register';
+import { isMedianOrWebView } from './webviewGuard';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -78,7 +79,7 @@ export class PwaService {
 
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (hadController && !this.reloadingOnControllerChange) {
+        if (hadController && !this.reloadingOnControllerChange && !isMedianOrWebView()) {
           this.reloadingOnControllerChange = true;
           window.location.reload();
         }

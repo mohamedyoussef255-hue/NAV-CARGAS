@@ -71,6 +71,7 @@ export class AdminModalComponent {
   private manageGovFilter = 'all';
   private recentlyAddedId: string | null = null;
   private addDraft: AddStationDraft = createEmptyAddDraft();
+  private cleanupAuthViewportListener: (() => void) | null = null;
 
   constructor(
     container: HTMLElement,
@@ -109,16 +110,26 @@ export class AdminModalComponent {
   }
 
   hide(): void {
+    this.cleanupAuthViewportListener?.();
+    this.cleanupAuthViewportListener = null;
     this.container.classList.add('hidden');
     this.container.innerHTML = '';
   }
 
   // Password verification modal for secret 0000 password
   private renderPasswordPrompt(): void {
+    this.cleanupAuthViewportListener?.();
+    this.cleanupAuthViewportListener = null;
+
+    const configuredPwd = normalizePasswordDigits(
+      AppConfigService.getConfig().adminPassword || DEFAULT_APP_CONFIG.adminPassword
+    );
+    const isNumericPwd = /^\d+$/.test(configuredPwd);
+
     this.container.classList.remove('hidden');
     this.container.innerHTML = `
-      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1500] flex items-center justify-center p-4">
-        <div class="glass-card w-full max-w-sm rounded-3xl p-6 shadow-2xl border text-center animate-scale-up" id="auth-box">
+      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1500] overflow-y-auto overscroll-contain flex items-center justify-center p-4" style="height: var(--vvh, 100dvh);">
+        <div class="glass-card w-full max-w-sm rounded-3xl p-6 shadow-2xl border text-center my-auto animate-fade-in" id="auth-box">
           
           <div class="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-400 mx-auto flex items-center justify-center text-2xl mb-4 border border-amber-500/30">
             🔒
@@ -133,19 +144,20 @@ export class AdminModalComponent {
 
           <form id="admin-auth-form" class="space-y-4">
             <div>
-              <div class="relative flex items-center">
+              <div id="auth-password-tap-zone" class="relative flex items-center">
                 <input 
                   type="password" 
                   id="admin-password-input" 
+                  autofocus
                   dir="ltr"
-                  inputmode="text"
+                  inputmode="${isNumericPwd ? 'numeric' : 'text'}"
                   autocapitalize="off"
                   autocorrect="off"
                   spellcheck="false"
                   placeholder="أدخل كلمة المرور" 
                   maxlength="32"
                   autocomplete="off"
-                  class="w-full text-center tracking-widest text-xl font-bold bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-2xl py-3 px-10 text-white outline-none font-sans"
+                  class="w-full text-center tracking-widest text-xl font-bold bg-slate-900 border border-slate-700 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 rounded-2xl py-3 px-10 text-white outline-none font-sans"
                 />
                 <button
                   type="button"
@@ -183,8 +195,52 @@ export class AdminModalComponent {
     `;
 
     const input = this.container.querySelector('#admin-password-input') as HTMLInputElement | null;
-    input?.focus();
-    setTimeout(() => input?.focus(), 60);
+    const authBox = this.container.querySelector('#auth-box') as HTMLElement | null;
+
+    const scrollAuthIntoView = () => {
+      if (!input) return;
+      try {
+        input.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        authBox?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      } catch {
+        input.scrollIntoView();
+      }
+    };
+
+    const focusPasswordField = () => {
+      if (!input) return;
+      input.focus({ preventScroll: false });
+      scrollAuthIntoView();
+    };
+
+    // Synchronous focus + RAF + post-keyboard timers for Android/iOS WebView reliability
+    focusPasswordField();
+    requestAnimationFrame(focusPasswordField);
+    const focusTimerA = setTimeout(scrollAuthIntoView, 120);
+    const focusTimerB = setTimeout(scrollAuthIntoView, 340);
+
+    input?.addEventListener('focus', () => {
+      scrollAuthIntoView();
+      setTimeout(scrollAuthIntoView, 220);
+    });
+
+    this.container.querySelector('#auth-password-tap-zone')?.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('#btn-toggle-auth-pwd')) return;
+      focusPasswordField();
+    });
+
+    const onViewportResize = () => {
+      if (document.activeElement === input || this.container.contains(document.activeElement)) {
+        scrollAuthIntoView();
+      }
+    };
+    window.visualViewport?.addEventListener('resize', onViewportResize);
+    this.cleanupAuthViewportListener = () => {
+      clearTimeout(focusTimerA);
+      clearTimeout(focusTimerB);
+      window.visualViewport?.removeEventListener('resize', onViewportResize);
+    };
 
     this.container.querySelector('#btn-toggle-auth-pwd')?.addEventListener('click', () => {
       if (!input) return;
@@ -192,6 +248,7 @@ export class AdminModalComponent {
       input.type = showing ? 'password' : 'text';
       const btn = this.container.querySelector('#btn-toggle-auth-pwd');
       if (btn) btn.textContent = showing ? '👁️' : '🙈';
+      focusPasswordField();
     });
 
     const form = this.container.querySelector('#admin-auth-form');
@@ -203,6 +260,8 @@ export class AdminModalComponent {
       );
       if (val && val === configured) {
         this.isAuthenticated = true;
+        this.cleanupAuthViewportListener?.();
+        this.cleanupAuthViewportListener = null;
         try {
           SoundService.playChime('start');
         } catch {
@@ -216,13 +275,12 @@ export class AdminModalComponent {
           // ignore
         }
         const err = this.container.querySelector('#auth-error-msg');
-        const box = this.container.querySelector('#auth-box');
         err?.classList.remove('hidden');
-        box?.classList.add('animate-shake');
-        setTimeout(() => box?.classList.remove('animate-shake'), 600);
+        authBox?.classList.add('animate-shake');
+        setTimeout(() => authBox?.classList.remove('animate-shake'), 600);
         if (input) {
           input.value = '';
-          input.focus();
+          focusPasswordField();
         }
       }
     });
@@ -237,6 +295,8 @@ export class AdminModalComponent {
 
   // Main Admin Dashboard
   private renderDashboard(): void {
+    this.cleanupAuthViewportListener?.();
+    this.cleanupAuthViewportListener = null;
     this.stations = StationStorage.getStations();
 
     this.container.innerHTML = `
