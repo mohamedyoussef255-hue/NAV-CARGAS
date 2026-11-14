@@ -18,6 +18,7 @@ import { DEFAULT_CARGAS_LOGO_DATA_URL } from '../assets/cargasLogo';
 
 interface AddStationDraft {
   name: string;
+  company: string;
   lat: string;
   lng: string;
   gov: string;
@@ -32,8 +33,11 @@ interface AddStationDraft {
   hasFast: boolean;
 }
 
+const PRESET_GAS_COMPANIES = ['كارجاس', 'غازتك', 'طاقة عربية', 'ماستر غاز', 'غاز مصر'];
+
 const createEmptyAddDraft = (): AddStationDraft => ({
   name: '',
+  company: 'كارجاس',
   lat: '',
   lng: '',
   gov: '',
@@ -47,6 +51,48 @@ const createEmptyAddDraft = (): AddStationDraft => ({
   hasCylinder: false,
   hasFast: true,
 });
+
+function readImageAsOptimizedDataUrl(file: File, maxSize = 180): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('تعذر قراءة ملف الصورة'));
+    reader.onload = () => {
+      const rawDataUrl = reader.result as string;
+      if (!rawDataUrl || file.type === 'image/svg+xml') {
+        resolve(rawDataUrl);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const w = img.naturalWidth || img.width;
+          const h = img.naturalHeight || img.height;
+          if (!w || !h || (w <= maxSize && h <= maxSize && rawDataUrl.length < 48000)) {
+            resolve(rawDataUrl);
+            return;
+          }
+          const scale = Math.min(maxSize / w, maxSize / h, 1);
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(w * scale));
+          canvas.height = Math.max(1, Math.round(h * scale));
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(rawDataUrl);
+            return;
+          }
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/png'));
+        } catch {
+          resolve(rawDataUrl);
+        }
+      };
+      img.onerror = () => resolve(rawDataUrl);
+      img.src = rawDataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 function normalizePasswordDigits(raw: string): string {
   return raw
@@ -70,6 +116,10 @@ export class AdminModalComponent {
   private editingStation: Station | null = null;
   private manageSearchQuery = '';
   private manageGovFilter = 'all';
+  private manageCompanyFilter = 'all';
+  private uploadCompanyMode: 'auto' | 'custom' = 'auto';
+  private uploadCompanyName = 'غازتك';
+  private brandingNewCompanyName = '';
   private recentlyAddedId: string | null = null;
   private addDraft: AddStationDraft = createEmptyAddDraft();
   private cleanupAuthViewportListener: (() => void) | null = null;
@@ -396,10 +446,13 @@ export class AdminModalComponent {
     }
   }
 
-  // Tab 1: Upload Excel/CSV
+  // Tab 1: Upload Excel/CSV/KMZ
   private renderUploadTab(): string {
     const res = this.pendingParsedResult;
     const diag = res?.diagnostics;
+    const allKnownCompanies = Array.from(
+      new Set([...PRESET_GAS_COMPANIES, ...StationStorage.getUniqueCompanies(this.stations, true)])
+    );
     const headerOptions = (selected?: string) =>
       [
         `<option value="">— تلقائي —</option>`,
@@ -408,15 +461,75 @@ export class AdminModalComponent {
         ),
       ].join('');
 
+    const companyCounts = new Map<string, number>();
+    if (res?.stations) {
+      for (const s of res.stations) {
+        const comp = StationStorage.normalizeCompanyName(s.company);
+        companyCounts.set(comp, (companyCounts.get(comp) || 0) + 1);
+      }
+    }
+
     return `
       <div class="space-y-5 max-w-3xl mx-auto">
+        <datalist id="admin-companies-datalist">
+          ${allKnownCompanies.map((c) => `<option value="${escapeHtml(c)}"></option>`).join('')}
+        </datalist>
+
         <div class="text-right">
           <h4 class="text-base font-bold text-white mb-1">
-            رفع ملف إكسيل أو KMZ/KML يحمل إحداثيات وبيانات محطات كارجاس
+            رفع ملف إكسيل أو KMZ/KML لمحطات كارجاس والشركات الأخرى
           </h4>
           <p class="text-xs text-slate-400">
-            يدعم النظام ملفات Excel (.xlsx, .xls, .csv) و Google Earth (.kmz, .kml)، والإحداثيات العشرية، والفواصل الأوروبية، والدرجات والدقائق والثواني (DMS)، وروابط خرائط جوجل، وإحداثيات UTM، مع الحفظ الدائم في IndexedDB للعمل أوفلاين.
+            يدعم النظام ملفات Excel (.xlsx, .xls, .csv) و Google Earth (.kmz, .kml) لمحطات كارجاس أو أي شركة غاز أخرى (مثل غازتك، طاقة عربية، ماستر غاز...)، مع التثبيت الدائم في الكود المصدري والعمل أوفلاين بالكامل.
           </p>
+        </div>
+
+        <!-- Company Assignment Box -->
+        <div class="p-4 rounded-2xl bg-slate-900/75 border border-cyan-500/35 space-y-3 text-right text-xs">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <div class="font-black text-cyan-300 flex items-center gap-1.5">
+              <span>🏢</span>
+              <span>تحديد شركة المحطات المرفوعة من هذا الملف</span>
+            </div>
+            <span class="text-[10px] text-slate-400">يتم تطبيقه فوراً على المعاينة والحفظ</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-800/80 border ${this.uploadCompanyMode === 'auto' ? 'border-emerald-500/60' : 'border-white/10'} cursor-pointer">
+              <input type="radio" name="upload-company-mode" value="auto" ${this.uploadCompanyMode === 'auto' ? 'checked' : ''} class="accent-emerald-500" />
+              <div>
+                <div class="font-bold text-white">تلقائي من الملف</div>
+                <div class="text-[10px] text-slate-400">يقرأ عمود «الشركة» أو مجلدات الـ KMZ (الافتراضي: كارجاس)</div>
+              </div>
+            </label>
+            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-800/80 border ${this.uploadCompanyMode === 'custom' ? 'border-cyan-500/60' : 'border-white/10'} cursor-pointer">
+              <input type="radio" name="upload-company-mode" value="custom" ${this.uploadCompanyMode === 'custom' ? 'checked' : ''} class="accent-cyan-500" />
+              <div>
+                <div class="font-bold text-white">تعيين لشركة محددة</div>
+                <div class="text-[10px] text-slate-400">إسناد كل محطات الملف للشركة المختارة أدناه</div>
+              </div>
+            </label>
+          </div>
+
+          <div class="${this.uploadCompanyMode === 'custom' ? 'flex' : 'hidden'} items-center gap-2 flex-wrap pt-1" id="upload-company-custom-box">
+            <input
+              type="text"
+              id="upload-company-name"
+              list="admin-companies-datalist"
+              value="${escapeHtml(this.uploadCompanyName)}"
+              placeholder="اكتب اسم الشركة (مثال: غازتك، طاقة عربية...)"
+              class="flex-1 min-w-[180px] bg-slate-800 border border-slate-700 focus:border-cyan-500 rounded-xl px-3 py-2 text-xs text-white font-cairo outline-none"
+            />
+            <div class="flex items-center gap-1 flex-wrap">
+              ${PRESET_GAS_COMPANIES.map(
+                (comp) => `
+                <button type="button" data-upload-company-preset="${escapeHtml(comp)}" class="btn-upload-company-preset px-2.5 py-1.5 rounded-lg text-[11px] font-bold border ${StationStorage.normalizeCompanyKey(this.uploadCompanyName) === StationStorage.normalizeCompanyKey(comp) ? 'bg-cyan-600/40 border-cyan-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'} transition-all">
+                  ${escapeHtml(comp)}
+                </button>
+              `
+              ).join('')}
+            </div>
+          </div>
         </div>
 
         <!-- Dropzone Box -->
@@ -444,8 +557,8 @@ export class AdminModalComponent {
         <!-- Sample Template Download -->
         <div class="p-4 rounded-2xl bg-slate-800/40 border border-slate-700/50 flex items-center justify-between gap-3">
           <div>
-            <div class="text-xs font-bold text-white">هل تحتاج إلى نموذج إكسيل منظم؟</div>
-            <div class="text-[11px] text-slate-400">قم بتحميل نموذج إكسيل جاهز بالعناوين العربية لملء إحداثيات محطاتك مباشرة</div>
+            <div class="text-xs font-bold text-white">هل تحتاج إلى نموذج إكسيل منظم (شاملاً عمود الشركة)؟</div>
+            <div class="text-[11px] text-slate-400">قم بتحميل نموذج إكسيل جاهز بالأعمدة العربية (الاسم، الشركة، خط العرض، خط الطول، المحافظة...)</div>
           </div>
           <button 
             id="btn-download-sample-excel"
@@ -464,12 +577,28 @@ export class AdminModalComponent {
             <div class="flex items-center justify-between flex-wrap gap-2">
               <div class="flex items-center gap-2">
                 <span class="text-emerald-400 text-lg">✅</span>
-                <span class="text-sm font-bold text-white">معاينة وفحص ملف الإكسيل قبل الحفظ</span>
+                <span class="text-sm font-bold text-white">معاينة وفحص الملف قبل الحفظ</span>
               </div>
               <span class="text-xs bg-emerald-500 text-black font-black px-2.5 py-0.5 rounded-full">
                 ${res.validRows} من ${res.totalRows} محطة صالحة
               </span>
             </div>
+
+            ${
+              companyCounts.size > 0
+                ? `
+              <div class="flex items-center gap-1.5 flex-wrap text-[11px]">
+                <span class="text-slate-300 font-bold">الشركات المكتشفة بالملف:</span>
+                ${Array.from(companyCounts.entries())
+                  .map(
+                    ([comp, cnt]) =>
+                      `<span class="inline-flex items-center gap-1 bg-cyan-500/20 text-cyan-200 border border-cyan-500/35 px-2 py-0.5 rounded-full font-bold">🏢 ${escapeHtml(comp)}: ${cnt} محطة</span>`
+                  )
+                  .join('')}
+              </div>
+            `
+                : ''
+            }
 
             <!-- Coordinate Quality Diagnostics -->
             ${
@@ -583,6 +712,7 @@ export class AdminModalComponent {
                   <thead class="bg-slate-800/90 text-slate-300 sticky top-0">
                     <tr>
                       <th class="p-2">المحطة كما هي في الجدول (أول ${Math.min(15, res.stations.length)} صف)</th>
+                      <th class="p-2">الشركة</th>
                       <th class="p-2">المحافظة</th>
                       <th class="p-2">خط العرض (Lat)</th>
                       <th class="p-2">خط الطول (Lng)</th>
@@ -595,6 +725,7 @@ export class AdminModalComponent {
                         (s) => `
                       <tr>
                         <td class="p-2 font-bold text-white">${escapeHtml(s.name)}</td>
+                        <td class="p-2"><span class="bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded font-bold">${escapeHtml(StationStorage.normalizeCompanyName(s.company))}</span></td>
                         <td class="p-2 text-slate-300">${escapeHtml(s.governorate)}</td>
                         <td class="p-2 font-mono text-emerald-400" dir="ltr">${s.lat.toFixed(6)}</td>
                         <td class="p-2 font-mono text-emerald-400" dir="ltr">${s.lng.toFixed(6)}</td>
@@ -622,24 +753,32 @@ export class AdminModalComponent {
 
             <div class="p-2.5 rounded-xl bg-emerald-900/40 border border-emerald-500/40 text-xs text-emerald-300 flex items-center gap-2">
               <span>💾</span>
-              <span>سيتم حفظ المحطات وتثبيتها مباشرة في الكود المصدري (src/data/defaultStations.ts)</span>
+              <span>سيتم حفظ المحطات وتثبيتها مباشرة في الكود المصدري (src/data/defaultStations.ts) لتعمل أوفلاين وعلى Vercel</span>
             </div>
 
-            <div class="text-xs text-slate-300 font-bold">حدد طريقة الحفظ:</div>
-            <div class="flex items-center gap-2">
-              <button 
-                id="btn-apply-replace"
-                class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-black py-2.5 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
-              >
-                <span>🔄</span>
-                <span>استبدال وحفظ في الكود المصدري مباشرة</span>
-              </button>
+            <div class="text-xs text-slate-300 font-bold">حدد طريقة الدمج والحفظ:</div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button 
                 id="btn-apply-append"
-                class="flex-1 bg-blue-600 hover:bg-blue-500 text-white font-black py-2.5 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
+                class="bg-blue-600 hover:bg-blue-500 text-white font-black py-2.5 px-3 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
               >
                 <span>➕</span>
-                <span>إلحاق وحفظ في الكود المصدري مباشرة</span>
+                <span>إلحاق ودمج مع المحطات الحالية</span>
+              </button>
+              <button 
+                id="btn-apply-replace-company"
+                class="bg-cyan-600 hover:bg-cyan-500 text-white font-black py-2.5 px-3 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
+                title="يستبدل محطات الشركة الموجودة في الملف فقط ويُبقي محطات كارجاس والشركات الأخرى كما هي"
+              >
+                <span>🏢</span>
+                <span>استبدال محطات هذه الشركة فقط</span>
+              </button>
+              <button 
+                id="btn-apply-replace"
+                class="bg-emerald-600 hover:bg-emerald-500 text-white font-black py-2.5 px-3 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
+              >
+                <span>🔄</span>
+                <span>استبدال كافة المحطات بالكامل</span>
               </button>
             </div>
           </div>
@@ -657,6 +796,7 @@ export class AdminModalComponent {
     const govs = Array.from(
       new Set(this.stations.map((s) => (s.governorate || '').trim()).filter(Boolean))
     );
+    const companies = StationStorage.getUniqueCompanies(this.stations, true);
 
     const normalizedSearch = normalizeArabicSearch(this.manageSearchQuery);
     const tokens = normalizedSearch ? normalizedSearch.split(/\s+/).filter(Boolean) : [];
@@ -665,9 +805,16 @@ export class AdminModalComponent {
       if (this.manageGovFilter !== 'all' && gov !== this.manageGovFilter) {
         return false;
       }
+      if (
+        this.manageCompanyFilter !== 'all' &&
+        StationStorage.normalizeCompanyKey(station.company) !==
+          StationStorage.normalizeCompanyKey(this.manageCompanyFilter)
+      ) {
+        return false;
+      }
       if (tokens.length > 0) {
         const haystack = normalizeArabicSearch(
-          `${station.name || ''} ${station.stationName || ''} ${station.governorate || ''} ${station.city || ''} ${station.address || ''} ${station.lat ?? ''},${station.lng ?? ''}`
+          `${station.name || ''} ${station.stationName || ''} ${station.company || ''} ${station.governorate || ''} ${station.city || ''} ${station.address || ''} ${station.lat ?? ''},${station.lng ?? ''}`
         );
         return tokens.every((tok) => haystack.includes(tok));
       }
@@ -681,7 +828,9 @@ export class AdminModalComponent {
     }).length;
 
     const hasManageFilter =
-      Boolean(this.manageSearchQuery.trim()) || this.manageGovFilter !== 'all';
+      Boolean(this.manageSearchQuery.trim()) ||
+      this.manageGovFilter !== 'all' ||
+      this.manageCompanyFilter !== 'all';
 
     return `
       <div class="space-y-4">
@@ -769,6 +918,13 @@ export class AdminModalComponent {
             }
           </div>
           <select
+            id="admin-manage-company"
+            class="bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-cyan-300 font-bold outline-none font-cairo"
+          >
+            <option value="all">كل الشركات (${companies.length})</option>
+            ${companies.map((c) => `<option value="${escapeHtml(c)}" ${StationStorage.normalizeCompanyKey(this.manageCompanyFilter) === StationStorage.normalizeCompanyKey(c) ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+          </select>
+          <select
             id="admin-manage-gov"
             class="bg-slate-800 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-white outline-none font-cairo"
           >
@@ -787,7 +943,7 @@ export class AdminModalComponent {
           <table class="w-full text-right text-xs">
             <thead class="bg-slate-800/80 text-slate-300 font-bold border-b border-white/10">
               <tr>
-                <th class="p-3">اسم المحطة</th>
+                <th class="p-3">اسم المحطة والشركة</th>
                 <th class="p-3">المحافظة</th>
                 <th class="p-3">الإحداثيات</th>
                 <th class="p-3">الأنشطة والخدمات</th>
@@ -803,7 +959,7 @@ export class AdminModalComponent {
                     ${
                       this.stations.length === 0
                         ? 'لا توجد محطات حالياً. يمكنك رفع ملف إكسيل أو إضافة محطة يدوياً أو استعادة الافتراضية.'
-                        : 'لا توجد محطات مطابقة للبحث أو المحافظة المختارة.'
+                        : 'لا توجد محطات مطابقة للبحث أو الفلتر المختار.'
                     }
                   </td>
                 </tr>
@@ -816,6 +972,8 @@ export class AdminModalComponent {
                           Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
                         const rowSuspicious = coordsValid && Math.abs(lat - lng) < 0.05;
                         const isRecent = this.recentlyAddedId === station.id;
+                        const companyName = StationStorage.normalizeCompanyName(station.company);
+                        const companyLogo = StationStorage.getLogoForCompany(companyName, station.logoUrl);
                         const svc = station.services || {
                           hasConversionCenter: false,
                           hasLubeCenter: false,
@@ -835,7 +993,11 @@ export class AdminModalComponent {
                     }">
                       <td class="p-3 font-bold text-white">
                         <div class="flex items-center gap-1.5 flex-wrap">
-                          <span>${escapeHtml(station.name || station.stationName || 'محطة كارجاس')}</span>
+                          <span class="inline-flex items-center gap-1 text-[10px] bg-cyan-950/70 text-cyan-200 border border-cyan-500/35 px-1.5 py-0.5 rounded-full">
+                            <img src="${companyLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="" class="w-3.5 h-3.5 rounded-full object-contain bg-slate-900" />
+                            <span>${escapeHtml(companyName)}</span>
+                          </span>
+                          <span>${escapeHtml(station.name || station.stationName || 'محطة غاز')}</span>
                           ${isRecent ? '<span class="text-[10px] bg-emerald-500 text-black font-black px-1.5 py-0.5 rounded">✨ مضافة حديثاً</span>' : ''}
                           ${!coordsValid ? '<span class="text-[10px] bg-rose-500/25 text-rose-300 px-1.5 py-0.5 rounded">إحداثي ناقص/خاطئ</span>' : rowSuspicious ? '<span class="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">إحداثي مشبوه</span>' : ''}
                         </div>
@@ -914,9 +1076,15 @@ export class AdminModalComponent {
       hasFastService: false,
     };
 
+    const allKnownCompanies = Array.from(
+      new Set([...PRESET_GAS_COMPANIES, ...StationStorage.getUniqueCompanies(this.stations, true)])
+    );
     return `
       <div class="fixed inset-0 bg-black/80 backdrop-blur-md z-[1550] flex items-center justify-center p-3">
         <div class="glass-card w-full max-w-lg max-h-[90vh] rounded-3xl p-5 shadow-2xl border overflow-y-auto custom-scrollbar animate-scale-up text-right">
+          <datalist id="admin-companies-datalist">
+            ${allKnownCompanies.map((c) => `<option value="${escapeHtml(c)}"></option>`).join('')}
+          </datalist>
           
           <div class="flex items-center justify-between pb-3 mb-3 border-b border-white/10">
             <h4 class="text-base font-black text-white">تعديل بيانات المحطة</h4>
@@ -924,9 +1092,15 @@ export class AdminModalComponent {
           </div>
 
           <form id="edit-station-form" class="space-y-3 text-xs">
-            <div>
-              <label class="block text-slate-300 font-bold mb-1">اسم المحطة</label>
-              <input type="text" id="edit-name" value="${escapeHtml(s.name)}" required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-cairo" />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">اسم المحطة</label>
+                <input type="text" id="edit-name" value="${escapeHtml(s.name)}" required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-cairo" />
+              </div>
+              <div>
+                <label class="block text-slate-300 font-bold mb-1">الشركة المشغلة</label>
+                <input type="text" id="edit-company" list="admin-companies-datalist" value="${escapeHtml(StationStorage.normalizeCompanyName(s.company))}" required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-cyan-200 font-bold font-cairo" />
+              </div>
             </div>
 
             <!-- Smart Coords Paste / Map Pick -->
@@ -1026,17 +1200,41 @@ export class AdminModalComponent {
   // Tab 3: Add station manually
   private renderAddTab(): string {
     const d = this.addDraft;
+    const allKnownCompanies = Array.from(
+      new Set([...PRESET_GAS_COMPANIES, ...StationStorage.getUniqueCompanies(this.stations, true)])
+    );
     return `
       <div class="max-w-xl mx-auto space-y-4 text-right">
+        <datalist id="admin-companies-datalist">
+          ${allKnownCompanies.map((c) => `<option value="${escapeHtml(c)}"></option>`).join('')}
+        </datalist>
+
         <div>
           <h4 class="text-base font-bold text-white mb-1">إضافة محطة غاز جديدة</h4>
-          <p class="text-xs text-slate-400">أدخل الإحداثيات يدوياً، أو الصق رابط خرائط جوجل، أو انقر مباشرة على الخريطة لتحديد مكان المحطة بدقة.</p>
+          <p class="text-xs text-slate-400">أدخل اسم المحطة والشركة المشغلة (كارجاس أو غازتك أو طاقة عربية...) وحدد موقعها على الخريطة بدقة.</p>
         </div>
 
         <form id="add-station-form" class="space-y-3 text-xs">
-          <div>
-            <label class="block text-slate-300 font-bold mb-1">اسم المحطة *</label>
-            <input type="text" id="add-name" value="${escapeHtml(d.name)}" placeholder="مثال: كارجاس - المقطم (الهضبة العليا)" required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-cairo" />
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">اسم المحطة *</label>
+              <input type="text" id="add-name" value="${escapeHtml(d.name)}" placeholder="مثال: المقطم (الهضبة العليا)" required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white font-cairo" />
+            </div>
+            <div>
+              <label class="block text-slate-300 font-bold mb-1">الشركة المشغلة *</label>
+              <input type="text" id="add-company" list="admin-companies-datalist" value="${escapeHtml(d.company)}" placeholder="كارجاس، غازتك، طاقة عربية..." required class="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-cyan-200 font-bold font-cairo" />
+            </div>
+          </div>
+
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="text-[11px] text-slate-400">شركات شائعة:</span>
+            ${PRESET_GAS_COMPANIES.map(
+              (comp) => `
+              <button type="button" data-add-company-preset="${escapeHtml(comp)}" class="btn-add-company-preset px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-800 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/30 transition-all">
+                ${escapeHtml(comp)}
+              </button>
+            `
+            ).join('')}
           </div>
 
           <!-- Smart Coordinates Picker & Paster -->
@@ -1258,6 +1456,9 @@ export class AdminModalComponent {
 
         </div>
 
+        <!-- 3. Per-Company Station Logos (Multi-Company Branding) -->
+        ${this.renderCompanyLogosSection()}
+
         <!-- Splash Screen Messages Editor (App Logo & Station Logo) -->
         <form id="splash-messages-form" class="w-full p-4 rounded-3xl bg-slate-900/75 border border-emerald-500/35 text-right space-y-4">
           <div class="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2.5">
@@ -1319,6 +1520,26 @@ export class AdminModalComponent {
                 <label class="block text-slate-400 font-bold mb-1 text-[11px]">رسالة شريط التحميل (المرحلة الثانية)</label>
                 <input type="text" id="branding-splash-station-loading" value="${escapeHtml(cfg.splashStationLoadingText)}" placeholder="جارٍ تحميل محطات كارجاس على الخريطة..." class="w-full bg-slate-800 border border-slate-700 focus:border-blue-500 rounded-xl p-2 text-slate-200 font-cairo outline-none" />
               </div>
+              <div class="pt-1.5 border-t border-white/10 space-y-1.5">
+                <div class="flex items-center justify-between gap-2 flex-wrap">
+                  <span class="text-[10px] font-bold text-cyan-300">الشعارات المعروضة بالترحيب الثاني حالياً:</span>
+                  <button type="button" id="btn-go-settings-from-branding" class="text-[10px] font-bold text-emerald-300 hover:underline">
+                    تغيير الشركات الظاهرة ←
+                  </button>
+                </div>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  ${StationStorage.getVisibleCompanyBrands(this.stations, cfg)
+                    .map(
+                      (b) => `
+                    <span class="inline-flex items-center gap-1 bg-slate-900 border border-white/10 px-2 py-0.5 rounded-full text-[10px] text-white font-bold">
+                      <img src="${b.logo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="" class="w-3.5 h-3.5 rounded-full object-contain" />
+                      <span>${escapeHtml(b.company)}</span>
+                    </span>
+                  `
+                    )
+                    .join('')}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1371,7 +1592,138 @@ export class AdminModalComponent {
     `;
   }
 
-  // Tab 5: App Name, Admin Password, User Icons Visibility & Street Map Lock
+  private renderCompanyLogosSection(): string {
+    const companies = StationStorage.getUniqueCompanies(this.stations, true);
+    const companyLogos = StationStorage.getCompanyLogos();
+    const countsByKey = new Map<string, number>();
+    for (const s of this.stations) {
+      const k = StationStorage.normalizeCompanyKey(s.company);
+      countsByKey.set(k, (countsByKey.get(k) || 0) + 1);
+    }
+
+    const findCustomLogoFor = (company: string): string | null => {
+      const key = StationStorage.normalizeCompanyKey(company);
+      for (const [k, v] of Object.entries(companyLogos)) {
+        if (StationStorage.normalizeCompanyKey(k) === key && v) return v;
+      }
+      return null;
+    };
+
+    return `
+      <div class="w-full p-4 rounded-3xl bg-slate-900/75 border border-cyan-500/35 text-right space-y-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2.5">
+          <div>
+            <div class="text-xs sm:text-sm font-black text-cyan-300 flex items-center gap-1.5">
+              <span>🏢</span>
+              <span>3. شعارات شركات الغاز (لوجو مستقل لكل شركة على حدة)</span>
+            </div>
+            <p class="text-[11px] text-slate-400 mt-0.5">
+              ارفع لوجو خاص لكل شركة (كارجاس، غازتك، طاقة عربية، ماستر غاز...) ليظهر تلقائياً على دبابيس محطاتها وبطاقاتها، ويُثبت في الكود المصدري.
+            </p>
+          </div>
+          <button
+            type="button"
+            id="btn-save-company-logos-source"
+            class="bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-black px-3 py-1.5 rounded-xl shadow transition-all shrink-0"
+          >
+            💾 حفظ شعارات الشركات بالكود المصدري
+          </button>
+        </div>
+
+        <!-- Add / Upload Logo for Any New or Preset Company -->
+        <div class="p-3 rounded-2xl bg-slate-950/60 border border-white/10 space-y-2.5 text-xs">
+          <div class="font-bold text-slate-200">إضافة أو رفع شعار لشركة أخرى:</div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <input
+              type="text"
+              id="branding-new-company-input"
+              value="${escapeHtml(this.brandingNewCompanyName)}"
+              placeholder="اكتب اسم الشركة (مثال: غازتك أو طاقة عربية)"
+              class="flex-1 min-w-[180px] bg-slate-800 border border-slate-700 focus:border-cyan-500 rounded-xl p-2 text-white font-cairo outline-none"
+            />
+            <input type="file" id="branding-new-company-file-input" accept="image/*" class="hidden" />
+            <button
+              type="button"
+              id="btn-branding-add-company-logo"
+              class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs transition-all shrink-0"
+            >
+              📤 اختيار اسم ورفع اللوجو
+            </button>
+          </div>
+          <div class="flex items-center gap-1.5 flex-wrap">
+            <span class="text-[10px] text-slate-400">شركات شائعة:</span>
+            ${PRESET_GAS_COMPANIES.map(
+              (c) => `
+              <button type="button" data-branding-company-preset="${escapeHtml(c)}" class="btn-branding-company-preset px-2 py-0.5 rounded-lg text-[10px] font-bold bg-slate-800 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/25 transition-all">
+                + ${escapeHtml(c)}
+              </button>
+            `
+            ).join('')}
+          </div>
+        </div>
+
+        <!-- Per-Company Logo Cards Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          ${companies
+            .map((company, idx) => {
+              const customLogo = findCustomLogoFor(company);
+              const previewLogo = StationStorage.getLogoForCompany(company);
+              const stCount = countsByKey.get(StationStorage.normalizeCompanyKey(company)) || 0;
+              return `
+                <div class="p-3 rounded-2xl bg-slate-950/70 border ${customLogo ? 'border-cyan-500/45' : 'border-white/10'} flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-3 min-w-0 flex-1">
+                    <div class="shrink-0 flex items-center justify-center">
+                      <div style="width:40px; height:40px; border-radius:50% 50% 50% 0; transform:rotate(-45deg); background:#0D2C54; border:2px solid #00C853; display:flex; align-items:center; justify-content:center;">
+                        <div style="transform:rotate(45deg); width:24px; height:24px; display:flex; align-items:center; justify-content:center;">
+                          <img src="${previewLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="${escapeHtml(company)}" style="width:22px; height:22px; object-fit:contain; border-radius:50%;" />
+                        </div>
+                      </div>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-xs font-black text-white truncate">${escapeHtml(company)}</div>
+                      <div class="text-[10px] ${customLogo ? 'text-cyan-300 font-bold' : 'text-slate-400'}">
+                        ${customLogo ? '✓ لوجو خاص مرفوع' : 'يستخدم شعار الدبوس الافتراضي'} • ${stCount} محطة
+                      </div>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <input type="file" accept="image/*" class="company-logo-file-input hidden" data-company-logo-input="${idx}" data-company="${escapeHtml(company)}" />
+                    <button
+                      type="button"
+                      class="btn-company-logo-upload bg-cyan-600/25 hover:bg-cyan-600 text-cyan-200 hover:text-white border border-cyan-500/40 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+                      data-company-logo-idx="${idx}"
+                    >
+                      📤 رفع
+                    </button>
+                    ${
+                      customLogo
+                        ? `<button
+                            type="button"
+                            class="btn-company-logo-remove bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 border border-rose-500/30 px-2 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+                            data-company="${escapeHtml(company)}"
+                            title="إزالة شعار هذه الشركة والعودة للافتراضي"
+                          >✕</button>`
+                        : ''
+                    }
+                  </div>
+                </div>
+              `;
+            })
+            .join('')}
+        </div>
+
+        <div class="flex items-center justify-between flex-wrap gap-2 pt-1 text-[11px] text-slate-400">
+          <span>الملف المصدري: <code>src/assets/companyLogos.ts</code></span>
+          <div class="flex items-center gap-2">
+            <button type="button" id="btn-copy-company-logos-branding" class="bg-slate-800 hover:bg-slate-700 text-cyan-300 px-2.5 py-1 rounded-lg font-bold">📋 نسخ</button>
+            <button type="button" id="btn-download-company-logos-branding" class="bg-slate-800 hover:bg-slate-700 text-blue-300 px-2.5 py-1 rounded-lg font-bold">💾 تحميل companyLogos.ts</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Tab 5: App Name, Admin Password, User Icons Visibility & Multi-Company Mode / Visibility
   private renderSettingsTab(): string {
     const cfg = AppConfigService.getConfig();
     const icons = cfg.userIcons;
@@ -1560,6 +1912,9 @@ export class AdminModalComponent {
           </div>
         </div>
 
+        <!-- 4. National Multi-Company Network Mode & Company Visibility Section -->
+        ${this.renderMultiCompanySettingsSection(cfg)}
+
         <!-- Save & Bake Action Bar -->
         <div class="flex items-center gap-3 flex-wrap">
           <button type="submit" id="btn-save-app-settings" class="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black py-3 px-5 rounded-2xl text-xs sm:text-sm shadow-xl transition-all active:scale-95">
@@ -1573,10 +1928,135 @@ export class AdminModalComponent {
     `;
   }
 
+  private renderMultiCompanySettingsSection(cfg: ReturnType<typeof AppConfigService.getConfig>): string {
+    const companies = StationStorage.getUniqueCompanies(this.stations, true);
+    const countsByKey = new Map<string, number>();
+    for (const s of this.stations) {
+      const k = StationStorage.normalizeCompanyKey(s.company);
+      countsByKey.set(k, (countsByKey.get(k) || 0) + 1);
+    }
+    const showAllCompanies = !Array.isArray(cfg.visibleCompanies) || cfg.visibleCompanies.length === 0;
+    const allowedKeys = new Set((cfg.visibleCompanies || []).map((c) => StationStorage.normalizeCompanyKey(c)));
+
+    return `
+      <div class="p-4 rounded-3xl bg-slate-900/60 border border-cyan-500/35 space-y-4">
+        <div class="flex items-center justify-between flex-wrap gap-2 border-b border-white/10 pb-2">
+          <div class="text-xs font-black text-cyan-300 flex items-center gap-1.5">
+            <span>🌐</span>
+            <span>4. إضافة الشبكة القومية (تعدد الشركات) والشركات الظاهرة على الخريطة</span>
+          </div>
+        </div>
+
+        <!-- National Network Add-on Toggle & Presets -->
+        <div class="p-3.5 rounded-2xl bg-slate-950/60 border border-white/10 space-y-3">
+          <label class="flex items-center justify-between gap-3 cursor-pointer">
+            <div>
+              <div class="text-xs font-black text-white">تفعيل إضافة: الشبكة القومية لمحطات الغاز (تعدد الشركات)</div>
+              <div class="text-[11px] text-slate-400 mt-0.5">
+                يحوّل عنوان الدليل إلى «دليل محطات الغاز الطبيعي» وزر الأقرب إلى «أقرب محطة غاز» لدعم جميع الشركات مع الاحتفاظ بنفس الخرائط الأوفلاين والخصائص.
+              </div>
+            </div>
+            <input type="checkbox" id="cfg-multi-company-mode" ${cfg.enableMultiCompanyMode ? 'checked' : ''} class="w-5 h-5 accent-cyan-500 rounded cursor-pointer shrink-0" />
+          </label>
+
+          <div class="flex items-center gap-2 flex-wrap pt-1">
+            <button
+              type="button"
+              id="btn-preset-national-network"
+              class="bg-cyan-600/25 hover:bg-cyan-600/45 text-cyan-200 border border-cyan-500/40 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+            >
+              🌐 تطبيق اسم وهوية: شبكة محطات الغاز على مستوى الجمهورية
+            </button>
+            <button
+              type="button"
+              id="btn-preset-cargas-only"
+              class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+            >
+              ↩️ استعادة اسم وهوية: محطات كارجاس
+            </button>
+          </div>
+        </div>
+
+        <!-- Visible Companies on Map & Stage 2 Splash Screen -->
+        <div class="p-3.5 rounded-2xl bg-slate-950/60 border border-white/10 space-y-3">
+          <div>
+            <div class="text-xs font-black text-emerald-300">الشركات الظاهرة على الخريطة والدليل وشاشة الترحيب الثانية:</div>
+            <div class="text-[10px] text-slate-400 mt-0.5">
+              يتحكم هذا الإعداد أيضاً في الشعارات التي تظهر في <b>رسالة الترحيب الثانية</b> عند تشغيل التطبيق (شعار كارجاس فقط، أو شعار الشركة المختارة، أو شعارات كافة الشركات معاً).
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-900 border ${showAllCompanies ? 'border-emerald-500/50' : 'border-white/10'} cursor-pointer">
+              <input type="radio" id="cfg-visibility-all" name="cfg-visibility-mode" value="all" ${showAllCompanies ? 'checked' : ''} class="accent-emerald-500" />
+              <div>
+                <div class="font-bold text-white">إظهار جميع الشركات معاً</div>
+                <div class="text-[10px] text-slate-400">عرض كافة الشركات على الخريطة + عرض جميع شعاراتها في الترحيب الثاني</div>
+              </div>
+            </label>
+            <label class="flex items-center gap-2 p-2.5 rounded-xl bg-slate-900 border ${!showAllCompanies ? 'border-cyan-500/50' : 'border-white/10'} cursor-pointer">
+              <input type="radio" id="cfg-visibility-selected" name="cfg-visibility-mode" value="selected" ${!showAllCompanies ? 'checked' : ''} class="accent-cyan-500" />
+              <div>
+                <div class="font-bold text-white">إظهار شركات محددة فقط</div>
+                <div class="text-[10px] text-slate-400">عرض الشركة أو الشركات المحددة فقط في الخريطة والترحيب الثاني</div>
+              </div>
+            </label>
+          </div>
+
+          <div id="cfg-visible-companies-list" class="${showAllCompanies ? 'opacity-50' : ''} grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+            ${companies
+              .map((comp) => {
+                const key = StationStorage.normalizeCompanyKey(comp);
+                const checked = showAllCompanies || allowedKeys.has(key);
+                const count = countsByKey.get(key) || 0;
+                const logo = StationStorage.getLogoForCompany(comp);
+                return `
+                  <label class="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900/90 border border-white/10 hover:border-cyan-500/40 cursor-pointer text-xs">
+                    <div class="flex items-center gap-2 min-w-0">
+                      <img src="${logo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="" class="w-5 h-5 rounded-full object-contain bg-slate-950 border border-white/10 shrink-0" />
+                      <span class="font-bold text-white truncate">${escapeHtml(comp)}</span>
+                      <span class="text-[10px] text-slate-400">(${count} محطة)</span>
+                    </div>
+                    <input type="checkbox" data-company="${escapeHtml(comp)}" class="cfg-visible-company-checkbox w-4 h-4 accent-cyan-500 rounded cursor-pointer shrink-0" ${checked ? 'checked' : ''} />
+                  </label>
+                `;
+              })
+              .join('')}
+          </div>
+
+          <!-- Live Preview of Stage 2 Splash Company Logos -->
+          <div class="p-3 rounded-2xl bg-slate-900/80 border border-cyan-500/25 space-y-2">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <span class="text-[11px] font-bold text-cyan-300">✨ معاينة الشعارات التي ستظهر في رسالة الترحيب الثانية:</span>
+              <span id="cfg-stage2-mode-badge" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-200 border border-cyan-500/30">
+                ${showAllCompanies ? 'كافة الشركات' : 'شركات محددة'}
+              </span>
+            </div>
+            <div id="cfg-splash-stage2-preview" class="flex items-center gap-2 flex-wrap">
+              ${StationStorage.getVisibleCompanyBrands(this.stations, cfg)
+                .map(
+                  (b) => `
+                <div class="flex items-center gap-1.5 bg-slate-950/90 border border-emerald-500/35 rounded-xl px-2.5 py-1.5">
+                  <div class="w-6 h-6 rounded-lg bg-slate-900 border border-white/10 p-0.5 overflow-hidden flex items-center justify-center shrink-0">
+                    <img src="${b.logo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="" class="w-full h-full object-contain" />
+                  </div>
+                  <span class="text-[11px] font-bold text-white">${escapeHtml(b.company)}</span>
+                </div>
+              `
+                )
+                .join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   // Tab 6: Source Code & GitHub / Vercel Export
   private renderSourceCodeTab(): string {
     const stationsCode = StationStorage.generateSourceCodeTypeScript();
     const logoCode = StationStorage.generateLogoSourceCode();
+    const companyLogosCode = StationStorage.generateCompanyLogosSourceCode();
     const configCode = AppConfigService.generateConfigSourceCode();
 
     return `
@@ -1587,7 +2067,7 @@ export class AdminModalComponent {
             اعتماد وتثبيت كافة التعديلات في الكود المصدري للتطبيق (GitHub & Vercel)
           </h4>
           <p class="text-xs text-slate-400">
-            يتم حفظ المحطات الـ (${this.stations.length}) والشعارات واسم التطبيق وكلمة السر وإعدادات إظهار/إخفاء الأيقونات مباشرة في الكود المصدري، لتُرفع على Vercel وتعمل فوراً دون أي تعديل يدوي!
+            يتم حفظ جميع المحطات (${this.stations.length}) والشعارات وشعار كل شركة على حدة واسم التطبيق وكلمة السر وإعدادات الشركات الظاهرة مباشرة في الكود المصدري، لتُرفع على Vercel وتعمل أوفلاين دون أي تعديل يدوي!
           </p>
         </div>
 
@@ -1601,7 +2081,7 @@ export class AdminModalComponent {
               </h5>
             </div>
             <p class="text-xs text-slate-300 leading-relaxed">
-              بالضغط على هذا الزر يتم تثبيت جميع المحطات (${this.stations.length} محطة) + شعار التطبيق والدبابيس + الاسم وكلمة السر وإعدادات الأيقونات داخل ملفات الكود المصدري (<code>defaultStations.ts</code>, <code>cargasLogo.ts</code>, <code>appConfig.ts</code>, <code>index.html</code>) وإلغاء الوضع الليلي للخريطة نهائياً.
+              بالضغط على هذا الزر يتم تثبيت جميع المحطات (${this.stations.length} محطة) + شعار التطبيق والدبابيس + شعارات الشركات المستقلة + الاسم وكلمة السر وإعدادات الأيقونات داخل ملفات الكود المصدري (<code>defaultStations.ts</code>, <code>cargasLogo.ts</code>, <code>companyLogos.ts</code>, <code>appConfig.ts</code>, <code>index.html</code>).
             </p>
           </div>
           <button 
@@ -1722,6 +2202,34 @@ export class AdminModalComponent {
           <pre class="bg-slate-950 p-3 rounded-xl border border-white/5 font-mono text-[11px] text-amber-300 max-h-48 overflow-y-auto custom-scrollbar select-all" dir="ltr">${escapeHtml(configCode)}</pre>
         </div>
 
+        <!-- Download & Copy companyLogos.ts -->
+        <div class="p-4 rounded-2xl bg-slate-800/40 border border-slate-700/50 space-y-3">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <span class="text-xs font-bold text-white">4. كود ملف شعارات الشركات المحدث (src/assets/companyLogos.ts):</span>
+              <div class="text-[10px] text-cyan-400">يثبت لوجو كل شركة على حدة في الكود المصدري للعمل أوفلاين</div>
+            </div>
+            <div class="flex items-center gap-2">
+              <button 
+                id="btn-copy-company-logos-code" 
+                class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-sm"
+              >
+                <span>📋</span>
+                <span>نسخ شعارات الشركات</span>
+              </button>
+              <button 
+                id="btn-download-company-logos-file" 
+                class="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 shadow-sm"
+              >
+                <span>💾</span>
+                <span>تحميل companyLogos.ts</span>
+              </button>
+            </div>
+          </div>
+
+          <pre class="bg-slate-950 p-3 rounded-xl border border-white/5 font-mono text-[11px] text-cyan-300 max-h-40 overflow-y-auto custom-scrollbar select-all" dir="ltr">${escapeHtml(companyLogosCode.length > 600 ? companyLogosCode.slice(0, 600) + '\n... [تم اختصار عرض الصور المشفرة]' : companyLogosCode)}</pre>
+        </div>
+
       </div>
     `;
   }
@@ -1792,9 +2300,56 @@ export class AdminModalComponent {
       });
     });
 
+    // Company selection for uploaded Excel/KMZ files
+    const applyUploadCompanyChange = async () => {
+      const box = this.container.querySelector('#upload-company-custom-box');
+      if (box) {
+        box.classList.toggle('flex', this.uploadCompanyMode === 'custom');
+        box.classList.toggle('hidden', this.uploadCompanyMode !== 'custom');
+      }
+      if (this.lastUploadedFile) {
+        await this.handleExcelFile(this.lastUploadedFile, true);
+      } else {
+        this.renderDashboard();
+      }
+    };
+
+    this.container.querySelectorAll('input[name="upload-company-mode"]').forEach((radio) => {
+      radio.addEventListener('change', (e) => {
+        const val = (e.target as HTMLInputElement).value === 'custom' ? 'custom' : 'auto';
+        this.uploadCompanyMode = val;
+        SoundService.playChime('click');
+        void applyUploadCompanyChange();
+      });
+    });
+
+    const uploadCompanyInput = this.container.querySelector('#upload-company-name') as HTMLInputElement | null;
+    uploadCompanyInput?.addEventListener('input', (e) => {
+      this.uploadCompanyName = (e.target as HTMLInputElement).value;
+    });
+    uploadCompanyInput?.addEventListener('change', () => {
+      if (this.uploadCompanyMode === 'custom' && this.lastUploadedFile) {
+        void this.handleExcelFile(this.lastUploadedFile, true);
+      }
+    });
+
+    this.container.querySelectorAll('.btn-upload-company-preset').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const comp = (e.currentTarget as HTMLElement).dataset.uploadCompanyPreset || 'غازتك';
+        this.uploadCompanyName = comp;
+        this.uploadCompanyMode = 'custom';
+        SoundService.playChime('click');
+        void applyUploadCompanyChange();
+      });
+    });
+
     this.container.querySelector('#btn-download-sample-excel')?.addEventListener('click', () => {
       SoundService.playChime('click');
-      ExcelParser.downloadSampleTemplate();
+      const sampleCompany =
+        this.uploadCompanyMode === 'custom' && this.uploadCompanyName.trim()
+          ? this.uploadCompanyName.trim()
+          : undefined;
+      ExcelParser.downloadSampleTemplate(sampleCompany);
     });
 
     this.container.querySelector('#btn-apply-replace')?.addEventListener('click', async () => {
@@ -1805,11 +2360,50 @@ export class AdminModalComponent {
         SoundService.playChime('start');
         const res = await StationStorage.saveStationsToSourceCode(stationsToSave);
         if (res.success) {
-          ToastService.show(`✅ تم حفظ وتثبيت ${count} محطة كارجاس بأسمائها كما هي في الكود المصدري (src/data/defaultStations.ts) مباشرة!`, 'success', 5000);
+          ToastService.show(`✅ تم حفظ وتثبيت ${count} محطة بأسمائها وشركاتها كما هي في الكود المصدري (src/data/defaultStations.ts) مباشرة!`, 'success', 5000);
         } else {
           ToastService.show(`تم حفظ ${count} محطة بنجاح في التطبيق!`, 'success', 4000);
         }
         this.pendingParsedResult = null;
+        this.manageCompanyFilter = 'all';
+        this.onDataChangedCallback();
+        this.currentTab = 'manage';
+        this.renderDashboard();
+      }
+    });
+
+    this.container.querySelector('#btn-apply-replace-company')?.addEventListener('click', async () => {
+      if (this.pendingParsedResult && this.pendingParsedResult.stations.length > 0) {
+        const parsed = this.pendingParsedResult.stations;
+        const targetCompanyKeys = new Set(
+          parsed.map((s) => StationStorage.normalizeCompanyKey(s.company))
+        );
+        const targetCompanyNames = Array.from(
+          new Set(parsed.map((s) => StationStorage.normalizeCompanyName(s.company)))
+        ).join('، ');
+        const current = StationStorage.getStations();
+        const kept = current.filter(
+          (s) => !targetCompanyKeys.has(StationStorage.normalizeCompanyKey(s.company))
+        );
+        const combined = [...parsed, ...kept];
+        StationStorage.saveStations(combined);
+        SoundService.playChime('start');
+        const res = await StationStorage.saveStationsToSourceCode(combined);
+        if (res.success) {
+          ToastService.show(
+            `✅ تم استبدال محطات (${targetCompanyNames}) بـ ${parsed.length} محطة وتثبيتها في الكود المصدري (الإجمالي: ${combined.length} محطة)!`,
+            'success',
+            5000
+          );
+        } else {
+          ToastService.show(
+            `تم تحديث محطات (${targetCompanyNames}): ${parsed.length} محطة. الإجمالي: ${combined.length} محطة.`,
+            'success',
+            4000
+          );
+        }
+        this.pendingParsedResult = null;
+        this.manageCompanyFilter = 'all';
         this.onDataChangedCallback();
         this.currentTab = 'manage';
         this.renderDashboard();
@@ -1829,6 +2423,7 @@ export class AdminModalComponent {
           ToastService.show(`تم إلحاق ${this.pendingParsedResult.stations.length} محطة بنجاح! الإجمالي: ${combined.length} محطة.`, 'success', 4000);
         }
         this.pendingParsedResult = null;
+        this.manageCompanyFilter = 'all';
         this.onDataChangedCallback();
         this.currentTab = 'manage';
         this.renderDashboard();
@@ -1843,7 +2438,7 @@ export class AdminModalComponent {
       const res = await StationStorage.commitAllEditsToSourceCode();
       if (res.success) {
         SoundService.playChime('start');
-        ToastService.show(`✅ تم اعتماد وتثبيت ${count} محطة والشعارات واسم التطبيق وكلمة السر والأيقونات في الكود المصدري (جاهز لـ Vercel)!`, 'success', 5000);
+        ToastService.show(`✅ تم اعتماد وتثبيت ${count} محطة والشعارات وشعارات الشركات واسم التطبيق وكلمة السر والأيقونات في الكود المصدري (جاهز لـ Vercel)!`, 'success', 5000);
       } else {
         ToastService.show(`تم الحفظ في التخزين (${res.message})`, 'info', 4000);
       }
@@ -1851,7 +2446,7 @@ export class AdminModalComponent {
     this.container.querySelector('#btn-direct-save-source')?.addEventListener('click', handleDirectSave);
     this.container.querySelector('#btn-direct-save-manage')?.addEventListener('click', handleDirectSave);
 
-    // Tab 2 Events: Search, Gov Filter, Locate, Edit, Delete
+    // Tab 2 Events: Search, Company & Gov Filter, Locate, Edit, Delete
     const manageSearchInput = this.container.querySelector('#admin-manage-search') as HTMLInputElement | null;
     manageSearchInput?.addEventListener('input', (e) => {
       this.manageSearchQuery = (e.target as HTMLInputElement).value;
@@ -1870,6 +2465,11 @@ export class AdminModalComponent {
       (this.container.querySelector('#admin-manage-search') as HTMLInputElement | null)?.focus();
     });
 
+    this.container.querySelector('#admin-manage-company')?.addEventListener('change', (e) => {
+      this.manageCompanyFilter = (e.target as HTMLSelectElement).value || 'all';
+      this.renderDashboard();
+    });
+
     this.container.querySelector('#admin-manage-gov')?.addEventListener('change', (e) => {
       this.manageGovFilter = (e.target as HTMLSelectElement).value || 'all';
       this.renderDashboard();
@@ -1879,6 +2479,7 @@ export class AdminModalComponent {
       SoundService.playChime('click');
       this.manageSearchQuery = '';
       this.manageGovFilter = 'all';
+      this.manageCompanyFilter = 'all';
       this.renderDashboard();
     });
 
@@ -2004,6 +2605,9 @@ export class AdminModalComponent {
       this.editingStation = {
         ...this.editingStation,
         name: (this.container.querySelector('#edit-name') as HTMLInputElement)?.value || this.editingStation.name,
+        company: StationStorage.normalizeCompanyName(
+          (this.container.querySelector('#edit-company') as HTMLInputElement)?.value || this.editingStation.company
+        ),
         lat: Number.isFinite(parsedLat) ? parsedLat : this.editingStation.lat,
         lng: Number.isFinite(parsedLng) ? parsedLng : this.editingStation.lng,
         governorate: (this.container.querySelector('#edit-gov') as HTMLInputElement)?.value || this.editingStation.governorate,
@@ -2062,6 +2666,9 @@ export class AdminModalComponent {
       if (!this.editingStation) return;
 
       const name = ((this.container.querySelector('#edit-name') as HTMLInputElement).value || '').trim();
+      const company = StationStorage.normalizeCompanyName(
+        (this.container.querySelector('#edit-company') as HTMLInputElement)?.value || this.editingStation.company
+      );
       const rawLat = (this.container.querySelector('#edit-lat') as HTMLInputElement).value;
       const rawLng = (this.container.querySelector('#edit-lng') as HTMLInputElement).value;
       const gov = ((this.container.querySelector('#edit-gov') as HTMLInputElement).value || '').trim();
@@ -2099,6 +2706,7 @@ export class AdminModalComponent {
         ...this.editingStation,
         name,
         stationName: name,
+        company,
         lat,
         lng,
         latitude: lat,
@@ -2123,7 +2731,7 @@ export class AdminModalComponent {
       ToastService.show(
         fixed.swapped
           ? `✅ تم حفظ تعديل "${saved.name}" وتصحيح تبديل خط الطول والعرض تلقائياً!`
-          : `✅ تم حفظ تعديل محطة "${saved.name}" بنجاح!`,
+          : `✅ تم حفظ تعديل محطة "${saved.name}" (${company}) بنجاح!`,
         'success'
       );
       this.editingStation = null;
@@ -2131,10 +2739,21 @@ export class AdminModalComponent {
       this.renderDashboard();
     });
 
-    // Tab 3 Events: Add Station Form + Smart Coordinates + Pick on Map
+    // Tab 3 Events: Add Station Form + Company Presets + Smart Coordinates + Pick on Map
+    this.container.querySelectorAll('.btn-add-company-preset').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const comp = (e.currentTarget as HTMLElement).dataset.addCompanyPreset || 'كارجاس';
+        this.addDraft.company = comp;
+        const compInput = this.container.querySelector('#add-company') as HTMLInputElement | null;
+        if (compInput) compInput.value = comp;
+        SoundService.playChime('click');
+      });
+    });
+
     const syncAddDraftFromDom = () => {
       this.addDraft = {
         name: (this.container.querySelector('#add-name') as HTMLInputElement | null)?.value ?? this.addDraft.name,
+        company: (this.container.querySelector('#add-company') as HTMLInputElement | null)?.value ?? this.addDraft.company,
         lat: (this.container.querySelector('#add-lat') as HTMLInputElement | null)?.value ?? this.addDraft.lat,
         lng: (this.container.querySelector('#add-lng') as HTMLInputElement | null)?.value ?? this.addDraft.lng,
         gov: (this.container.querySelector('#add-gov') as HTMLInputElement | null)?.value ?? this.addDraft.gov,
@@ -2209,6 +2828,9 @@ export class AdminModalComponent {
     addForm?.addEventListener('submit', (e) => {
       e.preventDefault();
       const name = ((this.container.querySelector('#add-name') as HTMLInputElement).value || '').trim();
+      const company = StationStorage.normalizeCompanyName(
+        (this.container.querySelector('#add-company') as HTMLInputElement)?.value || 'كارجاس'
+      );
       const rawLat = (this.container.querySelector('#add-lat') as HTMLInputElement).value;
       const rawLng = (this.container.querySelector('#add-lng') as HTMLInputElement).value;
       const gov = ((this.container.querySelector('#add-gov') as HTMLInputElement).value || '').trim();
@@ -2246,7 +2868,7 @@ export class AdminModalComponent {
         id: `station-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         name,
         stationName: name,
-        company: 'كارجاس',
+        company,
         lat,
         lng,
         latitude: lat,
@@ -2269,12 +2891,13 @@ export class AdminModalComponent {
       this.addDraft = createEmptyAddDraft();
       this.manageSearchQuery = '';
       this.manageGovFilter = 'all';
+      this.manageCompanyFilter = 'all';
       this.recentlyAddedId = saved.id;
       SoundService.playChime('start');
       ToastService.show(
         fixed.swapped
-          ? `✅ تمت إضافة "${saved.name}" وتثبيت دبوسها على الخريطة والجدول (مع تصحيح Lat/Lng تلقائياً)!`
-          : `✅ تمت إضافة محطة "${saved.name}" وظهور دبوسها في الجدول والخريطة (${StationStorage.getStations().length} محطة)!`,
+          ? `✅ تمت إضافة "${saved.name}" (${company}) وتثبيت دبوسها على الخريطة والجدول (مع تصحيح Lat/Lng تلقائياً)!`
+          : `✅ تمت إضافة محطة "${saved.name}" (${company}) وظهور دبوسها في الجدول والخريطة (${StationStorage.getStations().length} محطة)!`,
         'success',
         4500
       );
@@ -2466,7 +3089,126 @@ export class AdminModalComponent {
       this.renderDashboard();
     });
 
-    // Tab 5 (Settings) Events: App Name, Password, Icon Visibility & Commit All
+    this.container.querySelector('#btn-go-settings-from-branding')?.addEventListener('click', () => {
+      SoundService.playChime('click');
+      this.currentTab = 'settings';
+      this.renderDashboard();
+    });
+
+    // 3. Per-Company Logos Upload & Source Baking (Branding Tab)
+    const brandingNewCompInput = this.container.querySelector('#branding-new-company-input') as HTMLInputElement | null;
+    const brandingNewCompFileInput = this.container.querySelector('#branding-new-company-file-input') as HTMLInputElement | null;
+
+    brandingNewCompInput?.addEventListener('input', (e) => {
+      this.brandingNewCompanyName = (e.target as HTMLInputElement).value;
+    });
+
+    this.container.querySelectorAll('.btn-branding-company-preset').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const comp = (e.currentTarget as HTMLElement).dataset.brandingCompanyPreset || '';
+        this.brandingNewCompanyName = comp;
+        if (brandingNewCompInput) {
+          brandingNewCompInput.value = comp;
+          brandingNewCompInput.focus();
+        }
+        SoundService.playChime('click');
+      });
+    });
+
+    this.container.querySelector('#btn-branding-add-company-logo')?.addEventListener('click', () => {
+      const targetName = (brandingNewCompInput?.value || this.brandingNewCompanyName || '').trim();
+      if (!targetName) {
+        ToastService.show('يرجى كتابة اسم الشركة أو اختيارها أولاً قبل رفع الشعار.', 'warning');
+        brandingNewCompInput?.focus();
+        return;
+      }
+      this.brandingNewCompanyName = targetName;
+      brandingNewCompFileInput?.click();
+    });
+
+    brandingNewCompFileInput?.addEventListener('change', async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      const companyName = StationStorage.normalizeCompanyName(
+        brandingNewCompInput?.value || this.brandingNewCompanyName
+      );
+      try {
+        const dataUrl = await readImageAsOptimizedDataUrl(file);
+        StationStorage.saveCompanyLogo(companyName, dataUrl, { skipSourceSync: true });
+        SoundService.playChime('start');
+        const res = await StationStorage.saveCompanyLogosToSourceCode();
+        if (res.success) {
+          ToastService.show(`✅ تم رفع وتثبيت شعار شركة "${companyName}" في الكود المصدري بنجاح!`, 'success', 4500);
+        } else {
+          ToastService.show(`تم حفظ شعار شركة "${companyName}" محلياً بنجاح!`, 'success', 3500);
+        }
+        this.brandingNewCompanyName = '';
+        this.onDataChangedCallback();
+        this.renderDashboard();
+      } catch {
+        ToastService.show('تعذر معالجة صورة الشعار المختارة.', 'warning');
+      }
+    });
+
+    this.container.querySelectorAll('.btn-company-logo-upload').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        const idx = (e.currentTarget as HTMLElement).dataset.companyLogoIdx;
+        const input = this.container.querySelector(
+          `.company-logo-file-input[data-company-logo-input="${idx}"]`
+        ) as HTMLInputElement | null;
+        input?.click();
+      });
+    });
+
+    this.container.querySelectorAll('.company-logo-file-input').forEach((inputEl) => {
+      inputEl.addEventListener('change', async (e) => {
+        const input = e.target as HTMLInputElement;
+        const file = input.files?.[0];
+        const company = input.dataset.company;
+        if (!file || !company) return;
+        try {
+          const dataUrl = await readImageAsOptimizedDataUrl(file);
+          StationStorage.saveCompanyLogo(company, dataUrl, { skipSourceSync: true });
+          SoundService.playChime('start');
+          const res = await StationStorage.saveCompanyLogosToSourceCode();
+          if (res.success) {
+            ToastService.show(`✅ تم تحديث وتثبيت شعار شركة "${company}" في الكود المصدري!`, 'success', 4500);
+          } else {
+            ToastService.show(`تم تحديث شعار شركة "${company}" بنجاح!`, 'success', 3500);
+          }
+          this.onDataChangedCallback();
+          this.renderDashboard();
+        } catch {
+          ToastService.show('تعذر معالجة صورة الشعار المختارة.', 'warning');
+        }
+      });
+    });
+
+    this.container.querySelectorAll('.btn-company-logo-remove').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        const company = (e.currentTarget as HTMLElement).dataset.company;
+        if (!company) return;
+        StationStorage.saveCompanyLogo(company, null, { skipSourceSync: true });
+        SoundService.playChime('turn');
+        await StationStorage.saveCompanyLogosToSourceCode();
+        ToastService.show(`تمت إزالة شعار شركة "${company}" وإعادتها للشعار الافتراضي.`, 'info');
+        this.onDataChangedCallback();
+        this.renderDashboard();
+      });
+    });
+
+    this.container.querySelector('#btn-save-company-logos-source')?.addEventListener('click', async () => {
+      SoundService.playChime('click');
+      const res = await StationStorage.saveCompanyLogosToSourceCode();
+      if (res.success) {
+        SoundService.playChime('start');
+        ToastService.show('✅ تم تثبيت كافة شعارات الشركات في الكود المصدري (src/assets/companyLogos.ts) بنجاح!', 'success');
+      } else {
+        ToastService.show(res.message, 'info');
+      }
+    });
+
+    // Tab 5 (Settings) Events: App Name, Password, Icon Visibility, Multi-Company Mode & Commit All
     const collectIconsFromDom = (): UserIconsVisibility => {
       const icons = { ...AppConfigService.getConfig().userIcons };
       this.container.querySelectorAll('.cfg-icon-checkbox').forEach((el) => {
@@ -2534,10 +3276,164 @@ export class AdminModalComponent {
         (this.container.querySelector('#cfg-splash-station-loading') as HTMLInputElement)?.value.trim() ?? '',
     });
 
+    const visibleCompaniesListEl = this.container.querySelector('#cfg-visible-companies-list');
+    const stage2PreviewEl = this.container.querySelector('#cfg-splash-stage2-preview');
+    const stage2ModeBadgeEl = this.container.querySelector('#cfg-stage2-mode-badge');
+
+    const getFormVisibilitySelection = (): { mode: 'all' | 'selected'; companies: string[] } => {
+      const mode =
+        (this.container.querySelector('input[name="cfg-visibility-mode"]:checked') as HTMLInputElement)?.value === 'selected'
+          ? 'selected'
+          : 'all';
+      if (mode === 'all') {
+        return { mode: 'all', companies: [] };
+      }
+      const checked = Array.from(this.container.querySelectorAll('.cfg-visible-company-checkbox'))
+        .filter((el) => (el as HTMLInputElement).checked)
+        .map((el) => (el as HTMLInputElement).dataset.company || '')
+        .filter(Boolean);
+      return { mode: 'selected', companies: checked };
+    };
+
+    const refreshStage2CompaniesPreview = () => {
+      if (!stage2PreviewEl) return;
+      const sel = getFormVisibilitySelection();
+      if (stage2ModeBadgeEl) {
+        stage2ModeBadgeEl.textContent =
+          sel.mode === 'all'
+            ? 'كافة الشركات'
+            : sel.companies.length === 1
+              ? `شركة واحدة: ${sel.companies[0]}`
+              : `${sel.companies.length} شركة محددة`;
+      }
+      if (sel.mode === 'selected' && sel.companies.length === 0) {
+        stage2PreviewEl.innerHTML =
+          '<span class="text-[11px] text-amber-300 font-bold">⚠️ لم يتم تحديد أي شركة بعد — اختر شركة واحدة على الأقل</span>';
+        return;
+      }
+      const mockCfg = {
+        ...AppConfigService.getConfig(),
+        visibleCompanies: sel.mode === 'all' ? [] : sel.companies,
+      };
+      const brands = StationStorage.getVisibleCompanyBrands(this.stations, mockCfg);
+      stage2PreviewEl.innerHTML = brands
+        .map(
+          (b) => `
+        <div class="flex items-center gap-1.5 bg-slate-950/90 border border-emerald-500/35 rounded-xl px-2.5 py-1.5">
+          <div class="w-6 h-6 rounded-lg bg-slate-900 border border-white/10 p-0.5 overflow-hidden flex items-center justify-center shrink-0">
+            <img src="${b.logo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="" class="w-full h-full object-contain" />
+          </div>
+          <span class="text-[11px] font-bold text-white">${escapeHtml(b.company)}</span>
+        </div>
+      `
+        )
+        .join('');
+    };
+
     this.container.querySelector('#btn-preview-splash-from-settings')?.addEventListener('click', () => {
       SoundService.playChime('click');
-      AppConfigService.saveConfig(readSettingsSplashFields(), { skipSourceSync: true });
+      const sel = getFormVisibilitySelection();
+      const enableMultiCompanyMode = Boolean(
+        (this.container.querySelector('#cfg-multi-company-mode') as HTMLInputElement)?.checked
+      );
+      if (sel.mode === 'selected' && sel.companies.length === 0) {
+        ToastService.show('يرجى تحديد شركة واحدة على الأقل قبل المعاينة، أو اختر "إظهار جميع الشركات معاً".', 'warning');
+        return;
+      }
+      AppConfigService.saveConfig(
+        {
+          ...readSettingsSplashFields(),
+          enableMultiCompanyMode,
+          visibleCompanies: sel.mode === 'all' ? [] : sel.companies,
+        },
+        { skipSourceSync: true }
+      );
       this.onPreviewSplashCallback?.();
+    });
+
+    this.container.querySelectorAll('input[name="cfg-visibility-mode"]').forEach((radio) => {
+      radio.addEventListener('change', (e) => {
+        const val = (e.target as HTMLInputElement).value;
+        visibleCompaniesListEl?.classList.toggle('opacity-50', val === 'all');
+        refreshStage2CompaniesPreview();
+      });
+    });
+
+    this.container.querySelectorAll('.cfg-visible-company-checkbox').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const selectedRadio = this.container.querySelector('#cfg-visibility-selected') as HTMLInputElement | null;
+        if (selectedRadio && !selectedRadio.checked) {
+          selectedRadio.checked = true;
+          visibleCompaniesListEl?.classList.remove('opacity-50');
+        }
+        refreshStage2CompaniesPreview();
+      });
+    });
+
+    this.container.querySelector('#btn-preset-national-network')?.addEventListener('click', () => {
+      const multiCb = this.container.querySelector('#cfg-multi-company-mode') as HTMLInputElement | null;
+      if (multiCb) multiCb.checked = true;
+      const allRadio = this.container.querySelector('#cfg-visibility-all') as HTMLInputElement | null;
+      if (allRadio) {
+        allRadio.checked = true;
+        visibleCompaniesListEl?.classList.add('opacity-50');
+      }
+      this.container.querySelectorAll('.cfg-visible-company-checkbox').forEach((el) => {
+        (el as HTMLInputElement).checked = true;
+      });
+      const setVal = (sel: string, val: string) => {
+        const el = this.container.querySelector(sel) as HTMLInputElement | null;
+        if (el) el.value = val;
+      };
+      setVal('#cfg-app-name', 'شبكة محطات الغاز');
+      setVal('#cfg-app-short-name', 'محطات الغاز');
+      setVal('#cfg-app-subtitle', 'على مستوى الجمهورية');
+      setVal('#cfg-app-description', 'الشبكة القومية لمحطات تموين الغاز الطبيعي لجميع الشركات • جاهز للعمل أوفلاين');
+      setVal('#cfg-splash-app-title', 'شبكة محطات الغاز');
+      setVal('#cfg-splash-app-message', 'على مستوى الجمهورية');
+      setVal('#cfg-splash-station-title', 'دليل محطات الغاز الطبيعي');
+      setVal('#cfg-splash-station-message', 'جميع شركات تموين الغاز الطبيعي في مصر • يعمل أوفلاين');
+      setVal('#cfg-splash-station-loading', 'جارٍ تحميل محطات الغاز على مستوى الجمهورية...');
+      refreshStage2CompaniesPreview();
+      SoundService.playChime('click');
+      ToastService.show('🌐 تم تفعيل عرض كافة الشركات + هوية «شبكة محطات الغاز على مستوى الجمهورية». اضغط حفظ للتثبيت!', 'info', 5000);
+    });
+
+    this.container.querySelector('#btn-preset-cargas-only')?.addEventListener('click', () => {
+      const multiCb = this.container.querySelector('#cfg-multi-company-mode') as HTMLInputElement | null;
+      if (multiCb) multiCb.checked = false;
+      const cargasKey = StationStorage.normalizeCompanyKey('كارجاس');
+      const checkboxes = Array.from(this.container.querySelectorAll('.cfg-visible-company-checkbox')) as HTMLInputElement[];
+      const hasCargas = checkboxes.some(
+        (cb) => StationStorage.normalizeCompanyKey(cb.dataset.company || '') === cargasKey
+      );
+      if (hasCargas) {
+        const selectedRadio = this.container.querySelector('#cfg-visibility-selected') as HTMLInputElement | null;
+        if (selectedRadio) {
+          selectedRadio.checked = true;
+          visibleCompaniesListEl?.classList.remove('opacity-50');
+        }
+        checkboxes.forEach((cb) => {
+          cb.checked = StationStorage.normalizeCompanyKey(cb.dataset.company || '') === cargasKey;
+        });
+      }
+      const setVal = (sel: string, val: string) => {
+        const el = this.container.querySelector(sel) as HTMLInputElement | null;
+        if (el) el.value = val;
+      };
+      setVal('#cfg-app-name', DEFAULT_APP_CONFIG.appName);
+      setVal('#cfg-app-short-name', DEFAULT_APP_CONFIG.appShortName);
+      setVal('#cfg-app-subtitle', DEFAULT_APP_CONFIG.appSubtitle);
+      setVal('#cfg-app-description', DEFAULT_APP_CONFIG.appDescription);
+      setVal('#cfg-splash-app-title', DEFAULT_APP_CONFIG.splashAppTitle);
+      setVal('#cfg-splash-app-message', DEFAULT_APP_CONFIG.splashAppMessage);
+      setVal('#cfg-splash-app-loading', DEFAULT_APP_CONFIG.splashAppLoadingText);
+      setVal('#cfg-splash-station-title', DEFAULT_APP_CONFIG.splashStationTitle);
+      setVal('#cfg-splash-station-message', DEFAULT_APP_CONFIG.splashStationMessage);
+      setVal('#cfg-splash-station-loading', DEFAULT_APP_CONFIG.splashStationLoadingText);
+      refreshStage2CompaniesPreview();
+      SoundService.playChime('click');
+      ToastService.show('↩️ تمت استعادة هوية وشعار «محطات كارجاس» فقط في النموذج. اضغط حفظ لتأكيدها.', 'info', 4000);
     });
 
     const saveSettingsForm = async (alsoCommitAll: boolean) => {
@@ -2560,6 +3456,23 @@ export class AdminModalComponent {
         return;
       }
 
+      const enableMultiCompanyMode = Boolean(
+        (this.container.querySelector('#cfg-multi-company-mode') as HTMLInputElement)?.checked
+      );
+      const visibilityMode =
+        (this.container.querySelector('input[name="cfg-visibility-mode"]:checked') as HTMLInputElement)?.value || 'all';
+      let visibleCompanies: string[] = [];
+      if (visibilityMode === 'selected') {
+        visibleCompanies = Array.from(this.container.querySelectorAll('.cfg-visible-company-checkbox'))
+          .filter((el) => (el as HTMLInputElement).checked)
+          .map((el) => (el as HTMLInputElement).dataset.company || '')
+          .filter(Boolean);
+        if (visibleCompanies.length === 0) {
+          ToastService.show('يرجى تحديد شركة واحدة على الأقل للإظهار، أو اختر "إظهار جميع الشركات معاً".', 'warning');
+          return;
+        }
+      }
+
       const splashFields = readSettingsSplashFields();
       const userIcons = collectIconsFromDom();
       const saved = AppConfigService.saveConfig(
@@ -2571,13 +3484,15 @@ export class AdminModalComponent {
           ...splashFields,
           adminPassword,
           mapNightModeDisabled: true,
+          enableMultiCompanyMode,
+          visibleCompanies,
           userIcons,
         },
         { skipSourceSync: true }
       );
 
       if (alsoCommitAll) {
-        ToastService.show('جارٍ اعتماد كافة التعديلات (المحطات + الشعارات + الرسائل + الإعدادات) لـ Vercel...', 'info', 2500);
+        ToastService.show('جارٍ اعتماد كافة التعديلات (المحطات + الشعارات + شعارات الشركات + الرسائل + الإعدادات) لـ Vercel...', 'info', 2500);
         const res = await StationStorage.commitAllEditsToSourceCode();
         if (res.success) {
           SoundService.playChime('start');
@@ -2589,12 +3504,13 @@ export class AdminModalComponent {
         const res = await AppConfigService.saveConfigToSourceCode(saved);
         if (res.success) {
           SoundService.playChime('start');
-          ToastService.show('✅ تم حفظ وتثبيت اسم التطبيق ورسائل الشعارات وكلمة السر وإعدادات الأيقونات في الكود المصدري بنجاح!', 'success', 4500);
+          ToastService.show('✅ تم حفظ وتثبيت اسم التطبيق والشبكة القومية والشركات الظاهرة والإعدادات في الكود المصدري بنجاح!', 'success', 4500);
         } else {
           SoundService.playChime('start');
           ToastService.show('تم تطبيق الإعدادات وحفظها محلياً.', 'success');
         }
       }
+      this.onDataChangedCallback();
       this.renderDashboard();
     };
 
@@ -2707,13 +3623,44 @@ export class AdminModalComponent {
       SoundService.playChime('start');
       ToastService.show('تم تنزيل ملف appConfig.ts بنجاح!', 'success');
     });
+
+    const copyCompanyLogosAction = () => {
+      const logosCode = StationStorage.generateCompanyLogosSourceCode();
+      navigator.clipboard.writeText(logosCode).then(() => {
+        SoundService.playChime('start');
+        ToastService.show('تم نسخ ملف شعارات الشركات (companyLogos.ts) للحافظة!', 'success');
+      });
+    };
+    this.container.querySelector('#btn-copy-company-logos-branding')?.addEventListener('click', copyCompanyLogosAction);
+    this.container.querySelector('#btn-copy-company-logos-code')?.addEventListener('click', copyCompanyLogosAction);
+
+    const downloadCompanyLogosAction = () => {
+      const logosCode = StationStorage.generateCompanyLogosSourceCode();
+      const blob = new Blob([logosCode], { type: 'text/typescript;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'companyLogos.ts';
+      link.click();
+      URL.revokeObjectURL(url);
+      SoundService.playChime('start');
+      ToastService.show('تم تنزيل ملف companyLogos.ts بنجاح!', 'success');
+    };
+    this.container.querySelector('#btn-download-company-logos-branding')?.addEventListener('click', downloadCompanyLogosAction);
+    this.container.querySelector('#btn-download-company-logos-file')?.addEventListener('click', downloadCompanyLogosAction);
   }
 
   private async handleExcelFile(file: File, isRemap = false): Promise<void> {
     this.lastUploadedFile = file;
+    const customCompany = StationStorage.normalizeCompanyName(this.uploadCompanyName);
+    const parseOptions =
+      this.uploadCompanyMode === 'custom' && customCompany
+        ? { defaultCompany: customCompany, overrideCompany: true }
+        : { defaultCompany: 'كارجاس', overrideCompany: false };
     const result = await ExcelParser.parseStationFile(
       file,
-      isRemap ? this.columnMappingOverride : undefined
+      isRemap ? this.columnMappingOverride : undefined,
+      parseOptions
     );
     this.pendingParsedResult = result;
     if (!result.success) {

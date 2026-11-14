@@ -196,7 +196,6 @@ export class MapSearchComponent {
     }
 
     const matches = this.searchStations(this.query);
-    const stationLogo = StationStorage.getStationLogo() || DEFAULT_CARGAS_LOGO_DATA_URL;
     const fallbackUrl = DEFAULT_CARGAS_LOGO_DATA_URL.replace(/"/g, '&quot;');
     const topMatches = matches.slice(0, 12);
 
@@ -231,7 +230,8 @@ export class MapSearchComponent {
         ${topMatches
           .map((s) => {
             const dist = s.distanceKm !== undefined ? LocationService.formatDistance(s.distanceKm) : '';
-            const logo = s.logoUrl || stationLogo;
+            const logo = StationStorage.getLogoForCompany(s.company, s.logoUrl);
+            const companyName = StationStorage.normalizeCompanyName(s.company);
             return `
               <button
                 type="button"
@@ -242,13 +242,13 @@ export class MapSearchComponent {
                   <img
                     src="${logo}"
                     onerror="this.onerror=null;this.src='${fallbackUrl}';"
-                    alt=""
+                    alt="${escapeHtml(companyName)}"
                     class="w-7 h-7 rounded-full object-contain bg-slate-900 border border-emerald-500/40 p-0.5 shrink-0"
                   />
                   <div class="min-w-0 flex-1">
                     <div class="text-xs font-black text-white truncate">${escapeHtml(s.name)}</div>
                     <div class="text-[10px] text-slate-400 truncate">
-                      📍 ${escapeHtml(s.governorate || 'مصر')}${s.city ? ` • ${escapeHtml(s.city)}` : ''}${s.address ? ` — ${escapeHtml(s.address)}` : ''}
+                      <span class="text-emerald-300 font-bold">[${escapeHtml(companyName)}]</span> 📍 ${escapeHtml(s.governorate || 'مصر')}${s.city ? ` • ${escapeHtml(s.city)}` : ''}${s.address ? ` — ${escapeHtml(s.address)}` : ''}
                     </div>
                   </div>
                 </div>

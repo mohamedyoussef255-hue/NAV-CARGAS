@@ -32,6 +32,7 @@ class CargasApp {
   private locationModal: LocationModalComponent;
   private offlineModal: OfflineModalComponent;
 
+  private allStations: Station[] = [];
   private stations: Station[] = [];
   private visibleStations: Station[] = [];
   private userLocation: UserLocation;
@@ -49,21 +50,21 @@ class CargasApp {
     AppConfigService.applyDocumentBranding(initialConfig);
 
     this.userLocation = LocationService.getLocation();
-    this.stations = StationStorage.getStations();
+    this.allStations = StationStorage.getStations();
+    this.stations = StationStorage.filterStationsByVisibleCompanies(this.allStations, initialConfig);
     this.visibleStations = this.stations;
 
     const initialAppLogo = StationStorage.getAppLogo();
-    const initialStationLogo = StationStorage.getStationLogo();
 
-    // 1. Setup DOM Containers + Dual-Logo Launch Splash Screen (10 seconds total: 7s App Logo + 3s Stations Logo)
+    // 1. Setup DOM Containers + Dual-Logo Launch Splash Screen (10 seconds total: 7s App Logo + 3s Stations/Companies Logo(s))
     const appEl = document.getElementById('app') || document.body;
     appEl.innerHTML = `
-      <!-- 10s Dual-Logo Splash Screen: App Logo (0-7s) -> Cargas Station Logo (7-10s) -->
+      <!-- 10s Dual-Logo Splash Screen: App Logo (0-7s) -> Stations/Companies Logos (7-10s) -->
       <div id="app-splash-screen" dir="rtl">
-        <div class="relative w-full max-w-sm flex flex-col items-center justify-center min-h-[280px]">
+        <div class="grid place-items-center w-full max-w-lg min-h-[280px]">
           
           <!-- Stage 1: App Logo (7 seconds) -->
-          <div id="splash-stage-app" class="splash-stage flex flex-col items-center justify-center text-center gap-4 w-full">
+          <div id="splash-stage-app" class="splash-stage col-start-1 row-start-1 flex flex-col items-center justify-center text-center gap-4 w-full">
             <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-slate-900/90 border-2 border-emerald-400/60 shadow-2xl shadow-emerald-500/20 p-3.5 overflow-hidden flex items-center justify-center">
               <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
                 <img id="splash-app-logo-img" src="${initialAppLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
@@ -75,12 +76,10 @@ class CargasApp {
             </div>
           </div>
 
-          <!-- Stage 2: Cargas Station Logo (3 seconds) -->
-          <div id="splash-stage-station" class="splash-stage splash-stage-hidden absolute inset-0 flex flex-col items-center justify-center text-center gap-4 w-full">
-            <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-gradient-to-br from-emerald-950 to-slate-900 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/30 p-3.5 overflow-hidden flex items-center justify-center">
-              <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
-                <img id="splash-station-logo-img" src="${initialStationLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Cargas Station Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
-              </div>
+          <!-- Stage 2: Station / Companies Logos (3 seconds) -->
+          <div id="splash-stage-station" class="splash-stage splash-stage-hidden col-start-1 row-start-1 flex flex-col items-center justify-center text-center gap-4 w-full">
+            <div id="splash-station-logos-wrapper" class="flex flex-col items-center justify-center gap-2.5 w-full">
+              ${this.buildSplashStationLogosMarkup(initialConfig)}
             </div>
             <div class="space-y-1 px-2">
               <div id="splash-station-title" class="text-xl sm:text-2xl font-black text-emerald-300 ${initialConfig.splashStationTitle ? '' : 'hidden'}">${escapeHtml(initialConfig.splashStationTitle)}</div>
@@ -91,7 +90,7 @@ class CargasApp {
         </div>
 
         <!-- Animated 10s Progress Indicator -->
-        <div class="w-56 sm:w-64 mt-8 space-y-2 text-center">
+        <div class="w-56 sm:w-64 mt-6 sm:mt-8 space-y-2 text-center">
           <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
             <div class="splash-progress-bar h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 rounded-full"></div>
           </div>
@@ -336,6 +335,16 @@ class CargasApp {
             this.mapSearch.resetFilter();
           }
           this.refreshData();
+          const isVisible = this.stations.some((s) => s.id === station.id);
+          if (!isVisible) {
+            ToastService.show(
+              `ℹ️ محطة "${station.name}" تابعة لشركة (${station.company || 'كارجاس'}) المخفية حالياً عن الخريطة العامة. يمكنك إظهارها من تبويب الإعدادات.`,
+              'info',
+              4500
+            );
+            this.map.flyToLocation(station.lat, station.lng, 15);
+            return;
+          }
           void this.selectStation(station, true);
         },
         onPickCoordsOnMap: (cb) => {
@@ -514,21 +523,35 @@ class CargasApp {
 
     // 13. Setup Storage Listeners for Real-time Reactive Updates
     StationStorage.onStationsUpdated((newStations) => {
-      this.stations = newStations;
+      this.syncPublicStations(newStations);
+      this.refreshSplashStationLogos();
       this.mapSearch.updateData(this.stations, this.userLocation);
       this.renderMapStations();
       this.listModal.updateData(this.stations, this.userLocation);
       this.updateCoordinateHealthBanner();
     });
 
-    // Separate updates for App Logo (Header) vs Station Logo (Map Pins)
+    // Separate updates for App Logo (Header), Station Logo (Map Pins), and Per-Company Logos
     StationStorage.onAppLogoUpdated((appLogo) => {
       this.header.updateLogo(headerContainer, appLogo);
     });
 
     StationStorage.onStationLogoUpdated((stationLogo) => {
       this.map.setStationLogo(stationLogo);
+      this.refreshSplashStationLogos();
       this.renderMapStations();
+      if (this.selectedStation) {
+        this.stationCard.show(this.selectedStation);
+      }
+    });
+
+    StationStorage.onCompanyLogosUpdated(() => {
+      this.refreshSplashStationLogos();
+      this.renderMapStations();
+      if (this.selectedStation) {
+        this.stationCard.show(this.selectedStation);
+      }
+      this.listModal.updateData(this.stations, this.userLocation);
     });
 
     // 14. Subscribe to GPS Status & Start Tracking Immediately on Launch
@@ -581,12 +604,10 @@ class CargasApp {
       const latestStationLogo = StationStorage.getStationLogo();
       const latestAppLogo = StationStorage.getAppLogo();
       const splashAppImg = document.getElementById('splash-app-logo-img') as HTMLImageElement | null;
-      const splashStationImg = document.getElementById('splash-station-logo-img') as HTMLImageElement | null;
       if (splashAppImg && latestAppLogo) splashAppImg.src = latestAppLogo;
-      if (splashStationImg && latestStationLogo) splashStationImg.src = latestStationLogo;
 
       if (seededStations && seededStations.length > 0) {
-        this.stations = seededStations;
+        this.syncPublicStations(seededStations);
         this.map.setStationLogo(latestStationLogo);
         this.header.updateLogo(headerContainer, latestAppLogo);
         this.mapSearch.updateData(this.stations, this.userLocation);
@@ -594,7 +615,16 @@ class CargasApp {
         this.listModal.updateData(this.stations, this.userLocation);
         this.updateCoordinateHealthBanner();
       }
+      this.refreshSplashStationLogos();
     });
+  }
+
+  private syncPublicStations(rawStations?: Station[], cfg?: AppConfig): void {
+    if (rawStations) {
+      this.allStations = rawStations;
+    }
+    const activeCfg = cfg ?? AppConfigService.getConfig();
+    this.stations = StationStorage.filterStationsByVisibleCompanies(this.allStations, activeCfg);
   }
 
   private applyAppConfig(cfg: AppConfig): void {
@@ -602,6 +632,15 @@ class CargasApp {
     const headerContainer = document.getElementById('header-container');
     if (headerContainer) {
       this.header.applyConfig(headerContainer, cfg);
+    }
+
+    this.syncPublicStations(undefined, cfg);
+    if (this.mapSearch && this.map) {
+      this.mapSearch.updateData(this.stations, this.userLocation);
+      this.renderMapStations();
+    }
+    if (this.listModal) {
+      this.listModal.updateData(this.stations, this.userLocation);
     }
 
     const syncSplashText = (id: string, val: string) => {
@@ -614,6 +653,7 @@ class CargasApp {
     syncSplashText('splash-app-message', cfg.splashAppMessage);
     syncSplashText('splash-station-title', cfg.splashStationTitle);
     syncSplashText('splash-station-message', cfg.splashStationMessage);
+    this.refreshSplashStationLogos(cfg);
     const statusLabel = document.getElementById('splash-status-label');
     const stageStationVisible = !document
       .getElementById('splash-stage-station')
@@ -693,12 +733,67 @@ class CargasApp {
     );
   }
 
+  private buildSplashStationLogosMarkup(cfg: AppConfig): string {
+    const brands = StationStorage.getVisibleCompanyBrands(this.allStations, cfg);
+    if (brands.length <= 1) {
+      const single = brands[0] || {
+        company: 'كارجاس',
+        logo: StationStorage.getStationLogo() || DEFAULT_CARGAS_LOGO_DATA_URL,
+      };
+      const isNonCargas =
+        StationStorage.normalizeCompanyKey(single.company) !==
+        StationStorage.normalizeCompanyKey('كارجاس');
+      return `
+        <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-gradient-to-br from-emerald-950 to-slate-900 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/30 p-3.5 overflow-hidden flex items-center justify-center">
+          <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
+            <img id="splash-station-logo-img" src="${single.logo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="${escapeHtml(single.company)}" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
+          </div>
+        </div>
+        ${
+          isNonCargas
+            ? `<div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/15 border border-cyan-400/40 text-cyan-200 text-xs font-extrabold">${escapeHtml(single.company)}</div>`
+            : ''
+        }
+      `;
+    }
+
+    const compact = brands.length >= 4;
+    const cardSizeCls = compact
+      ? 'w-20 h-20 sm:w-24 sm:h-24 p-2 rounded-2xl'
+      : 'w-24 h-24 sm:w-28 sm:h-28 p-2.5 rounded-3xl';
+    const maxDisplay = brands.slice(0, 12);
+    return `
+      <div class="w-full max-w-md flex flex-wrap items-center justify-center gap-3 sm:gap-3.5 px-2">
+        ${maxDisplay
+          .map(
+            (b) => `
+            <div class="flex flex-col items-center gap-1.5">
+              <div class="${cardSizeCls} shrink-0 bg-gradient-to-br from-emerald-950/95 to-slate-900/95 border-2 border-emerald-400/80 shadow-xl shadow-emerald-500/20 overflow-hidden flex items-center justify-center">
+                <div class="w-full h-full rounded-xl overflow-hidden flex items-center justify-center">
+                  <img src="${b.logo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="${escapeHtml(b.company)}" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-lg" />
+                </div>
+              </div>
+              <span class="text-[11px] font-extrabold text-cyan-200 bg-slate-900/80 border border-white/10 px-2.5 py-0.5 rounded-full max-w-[100px] truncate">${escapeHtml(b.company)}</span>
+            </div>
+          `
+          )
+          .join('')}
+      </div>
+    `;
+  }
+
+  private refreshSplashStationLogos(cfg?: AppConfig): void {
+    const wrapper = document.getElementById('splash-station-logos-wrapper');
+    if (!wrapper) return;
+    const activeCfg = cfg ?? AppConfigService.getConfig();
+    wrapper.innerHTML = this.buildSplashStationLogosMarkup(activeCfg);
+  }
+
   private previewSplashScreen(): void {
     this.clearSplashTimers();
     document.getElementById('app-splash-screen')?.remove();
     const cfg = AppConfigService.getConfig();
     const appLogo = StationStorage.getAppLogo();
-    const stationLogo = StationStorage.getStationLogo();
     const overlay = document.createElement('div');
     overlay.id = 'app-splash-screen';
     overlay.setAttribute('dir', 'rtl');
@@ -707,11 +802,11 @@ class CargasApp {
       <button type="button" id="btn-close-splash-preview" class="absolute top-4 left-4 bg-slate-800/90 hover:bg-slate-700 text-white text-xs font-bold px-3.5 py-2 rounded-xl border border-white/15 shadow-lg transition-all">
         ✕ إنهاء المعاينة
       </button>
-      <div class="relative w-full max-w-sm flex flex-col items-center justify-center min-h-[280px]">
-        <div id="splash-stage-app" class="splash-stage flex flex-col items-center justify-center text-center gap-4 w-full">
+      <div class="grid place-items-center w-full max-w-lg min-h-[280px]">
+        <div id="splash-stage-app" class="splash-stage col-start-1 row-start-1 flex flex-col items-center justify-center text-center gap-4 w-full">
           <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-slate-900/90 border-2 border-emerald-400/60 shadow-2xl shadow-emerald-500/20 p-3.5 overflow-hidden flex items-center justify-center">
             <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
-              <img src="${appLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
+              <img id="splash-app-logo-img" src="${appLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
             </div>
           </div>
           <div class="space-y-1 px-2">
@@ -719,11 +814,9 @@ class CargasApp {
             <p id="splash-app-message" class="text-sm font-bold text-emerald-300 leading-relaxed ${cfg.splashAppMessage ? '' : 'hidden'}">${escapeHtml(cfg.splashAppMessage)}</p>
           </div>
         </div>
-        <div id="splash-stage-station" class="splash-stage splash-stage-hidden absolute inset-0 flex flex-col items-center justify-center text-center gap-4 w-full">
-          <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-gradient-to-br from-emerald-950 to-slate-900 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/30 p-3.5 overflow-hidden flex items-center justify-center">
-            <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
-              <img src="${stationLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Cargas Station Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
-            </div>
+        <div id="splash-stage-station" class="splash-stage splash-stage-hidden col-start-1 row-start-1 flex flex-col items-center justify-center text-center gap-4 w-full">
+          <div id="splash-station-logos-wrapper" class="flex flex-col items-center justify-center gap-2.5 w-full">
+            ${this.buildSplashStationLogosMarkup(cfg)}
           </div>
           <div class="space-y-1 px-2">
             <div id="splash-station-title" class="text-xl sm:text-2xl font-black text-emerald-300 ${cfg.splashStationTitle ? '' : 'hidden'}">${escapeHtml(cfg.splashStationTitle)}</div>
@@ -731,7 +824,7 @@ class CargasApp {
           </div>
         </div>
       </div>
-      <div class="w-56 sm:w-64 mt-8 space-y-2 text-center">
+      <div class="w-56 sm:w-64 mt-6 sm:mt-8 space-y-2 text-center">
         <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
           <div class="splash-progress-bar h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 rounded-full"></div>
         </div>
@@ -945,12 +1038,23 @@ class CargasApp {
 
   // Refresh data when admin modifies anything
   private refreshData(): void {
-    this.stations = StationStorage.getStations();
+    this.syncPublicStations(StationStorage.getStations());
     this.map.setStationLogo(StationStorage.getStationLogo());
     this.mapSearch.updateData(this.stations, this.userLocation);
     this.renderMapStations();
     this.listModal.updateData(this.stations, this.userLocation);
     this.updateCoordinateHealthBanner();
+
+    if (this.selectedStation) {
+      const updatedSelected = this.stations.find((s) => s.id === this.selectedStation?.id);
+      if (updatedSelected) {
+        this.selectedStation = updatedSelected;
+        this.stationCard.show(updatedSelected);
+      } else {
+        this.selectedStation = null;
+        this.stationCard.hide();
+      }
+    }
 
     const headerContainer = document.getElementById('header-container');
     if (headerContainer) {

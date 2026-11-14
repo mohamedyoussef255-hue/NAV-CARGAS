@@ -27,6 +27,8 @@ export interface AppConfig {
   splashStationLoadingText: string;
   adminPassword: string;
   mapNightModeDisabled: boolean;
+  enableMultiCompanyMode: boolean;
+  visibleCompanies: string[];
   userIcons: UserIconsVisibility;
 }
 
@@ -59,6 +61,8 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   splashStationLoadingText: 'جارٍ تحميل محطات كارجاس على الخريطة...',
   adminPassword: '0000',
   mapNightModeDisabled: true,
+  enableMultiCompanyMode: false,
+  visibleCompanies: [],
   userIcons: { ...DEFAULT_USER_ICONS },
 };
 
@@ -69,19 +73,21 @@ export const BAKED_APP_CONFIG: AppConfig = {
   "appName": "محطات كارجاس",
   "appShortName": "كارجاس",
   "appSubtitle": "الأقرب لك دائماً",
-  "appDescription": "تطبيق محطات تموين الغاز الطبيعي كارجاس الأقرب لك دائماً مع خريطة تفاعلية أوفلاين وملاحة صوتية.",
+  "appDescription": "الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين",
   "splashAppTitle": "محطات كارجاس",
   "splashAppMessage": "الأقرب لك دائماً",
   "splashAppLoadingText": "جارٍ تهيئة الخريطة وقاعدة المحطات...",
-  "splashStationTitle": "محطات غاز كارجاس",
-  "splashStationMessage": "الشبكة القومية لمحطات تموين الغاز الطبيعي • جاهز للعمل أوفلاين",
+  "splashStationTitle": "محطات كارجاس",
+  "splashStationMessage": "شبكة محطات تموين كارجاس • جاهز للعمل أوفلاين",
   "splashStationLoadingText": "جارٍ تحميل محطات كارجاس على الخريطة...",
   "adminPassword": "0000",
   "mapNightModeDisabled": true,
+  "enableMultiCompanyMode": false,
+  "visibleCompanies": [],
   "userIcons": {
     "nearestStation": true,
     "offlineMap": true,
-    "installPwa": true,
+    "installPwa": false,
     "stationsList": true,
     "themeToggle": true,
     "networkBadge": true,

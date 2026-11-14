@@ -366,7 +366,55 @@ export default defineConfig({
             return;
           }
 
-          // POST /api/save-config: writes app name, admin password, and icon visibility into src/config/appConfig.ts & index.html
+          // POST /api/save-company-logos: writes per-company logos atomically to src/assets/companyLogos.ts
+          if (req.url === '/api/save-company-logos' && req.method === 'POST') {
+            void readJsonBody(req)
+              .then((parsed) =>
+                enqueueWrite(() => {
+                  const rawLogos = parsed?.companyLogos;
+                  if (!rawLogos || typeof rawLogos !== 'object' || Array.isArray(rawLogos)) {
+                    res.statusCode = 400;
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                    res.end(
+                      JSON.stringify({ success: false, error: 'بيانات شعارات الشركات غير صالحة' })
+                    );
+                    return;
+                  }
+
+                  const cleanLogos: Record<string, string> = {};
+                  for (const [k, v] of Object.entries(rawLogos)) {
+                    const companyName = String(k || '').trim();
+                    const logoData = typeof v === 'string' ? v.trim() : '';
+                    if (companyName && logoData) {
+                      cleanLogos[companyName] = logoData;
+                    }
+                  }
+
+                  const targetFile = path.resolve(process.cwd(), 'src/assets/companyLogos.ts');
+                  const tsContent = `/**\n * شعارات شركات الغاز الطبيعي المعتمدة والمثبتة في الكود المصدري\n * تاريخ التحديث: ${new Date().toLocaleString('ar-EG')} (${new Date().toISOString()})\n */\nexport const BAKED_COMPANY_LOGOS: Record<string, string> = ${JSON.stringify(cleanLogos, null, 2)};\n`;
+                  const changed = atomicWriteIfChanged(targetFile, tsContent);
+
+                  res.statusCode = 200;
+                  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                  res.end(
+                    JSON.stringify({
+                      success: true,
+                      unchanged: !changed,
+                      count: Object.keys(cleanLogos).length,
+                      message: `تم حفظ وتثبيت شعارات (${Object.keys(cleanLogos).length}) شركة مباشرة في الكود المصدري (src/assets/companyLogos.ts) بنجاح!`,
+                    })
+                  );
+                })
+              )
+              .catch((err: any) => {
+                res.statusCode = 500;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                res.end(JSON.stringify({ success: false, error: err?.message || 'Error' }));
+              });
+            return;
+          }
+
+          // POST /api/save-config: writes app name, admin password, multi-company & icon visibility into src/config/appConfig.ts & index.html
           if (req.url === '/api/save-config' && req.method === 'POST') {
             void readJsonBody(req)
               .then((parsed) =>
@@ -420,6 +468,16 @@ export default defineConfig({
                         ? cfg.adminPassword.trim()
                         : '0000',
                     mapNightModeDisabled: true,
+                    enableMultiCompanyMode: Boolean(cfg.enableMultiCompanyMode),
+                    visibleCompanies: Array.isArray(cfg.visibleCompanies)
+                      ? Array.from(
+                          new Set(
+                            cfg.visibleCompanies
+                              .map((c: unknown) => (typeof c === 'string' ? c.trim() : ''))
+                              .filter(Boolean)
+                          )
+                        )
+                      : [],
                     userIcons: {
                       nearestStation: icons.nearestStation ?? true,
                       offlineMap: icons.offlineMap ?? true,
@@ -467,6 +525,8 @@ export interface AppConfig {
   splashStationLoadingText: string;
   adminPassword: string;
   mapNightModeDisabled: boolean;
+  enableMultiCompanyMode: boolean;
+  visibleCompanies: string[];
   userIcons: UserIconsVisibility;
 }
 
@@ -499,6 +559,8 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   splashStationLoadingText: 'جارٍ تحميل محطات كارجاس على الخريطة...',
   adminPassword: '0000',
   mapNightModeDisabled: true,
+  enableMultiCompanyMode: false,
+  visibleCompanies: [],
   userIcons: { ...DEFAULT_USER_ICONS },
 };
 

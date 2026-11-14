@@ -101,7 +101,7 @@ export class HeaderComponent {
                 <circle cx="12" cy="12" r="10"/>
                 <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
               </svg>
-              <span>أقرب محطة كارجاس</span>
+              <span id="btn-nearest-label">${cfg.enableMultiCompanyMode ? 'أقرب محطة غاز' : 'أقرب محطة كارجاس'}</span>
             </button>
 
             <!-- Download Offline Map Button -->
@@ -200,6 +200,11 @@ export class HeaderComponent {
 
     const descEl = container.querySelector('#header-app-description');
     if (descEl) descEl.textContent = cfg.appDescription;
+
+    const nearestLabelEl = container.querySelector('#btn-nearest-label');
+    if (nearestLabelEl) {
+      nearestLabelEl.textContent = cfg.enableMultiCompanyMode ? 'أقرب محطة غاز' : 'أقرب محطة كارجاس';
+    }
 
     const icons = cfg.userIcons;
     const pwa = PwaService.getState();

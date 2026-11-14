@@ -632,8 +632,7 @@ export class MapView {
         '<span class="station-mini-tag" style="position:absolute; top:-8px; right:-8px; transform:rotate(45deg); font-size:8px; font-weight:900; background:#14B8A6; color:#fff; padding:1px 4px; border-radius:4px;">مظلة</span>';
     }
 
-    const activeLogo =
-      station.logoUrl || this.stationLogo || StationStorage.getStationLogo() || DEFAULT_CARGAS_LOGO_DATA_URL;
+    const activeLogo = StationStorage.getLogoForCompany(station.company, station.logoUrl);
     const fallbackUrl = DEFAULT_CARGAS_LOGO_DATA_URL.replace(/"/g, '&quot;');
     const logoHtml = `<img src="${activeLogo}" alt="${escapeHtml(station.name)}" onerror="this.onerror=null;this.src='${fallbackUrl}';" style="width:24px; height:24px; object-fit:contain; border-radius:50%; display:block;" />`;
 
@@ -664,8 +663,10 @@ export class MapView {
       zIndexOffset: isSelected ? 1200 : 100,
     });
 
+    const companyLabel = station.company ? StationStorage.normalizeCompanyName(station.company) : 'كارجاس';
     const tooltipLabel = `<div style="font-family:'Cairo',sans-serif; font-size:11px; font-weight:800; direction:rtl; text-align:right;">
       <div>${escapeHtml(station.name)}</div>
+      <div style="font-size:10px; font-weight:700; color:#38bdf8;">🏢 ${escapeHtml(companyLabel)}</div>
       ${station.governorate ? `<div style="font-size:10px; font-weight:600; color:#10b981;">📍 ${escapeHtml(station.governorate)}${station.city ? ` • ${escapeHtml(station.city)}` : ''}</div>` : ''}
     </div>`;
     marker.bindTooltip(tooltipLabel, {

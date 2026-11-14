@@ -12,6 +12,11 @@ export interface ColumnMappingOverride {
   addressCol?: string;
 }
 
+export interface ParseOptions {
+  defaultCompany?: string;
+  overrideCompany?: boolean;
+}
+
 export interface ParseDiagnostics {
   uniqueCoordCount: number;
   governoratesCount: number;
@@ -738,7 +743,7 @@ function inferNameColumnFromData(
         if (/[\u0600-\u06FFa-zA-Z]/.test(str)) {
           letterTextCount++;
         }
-        if (/كارجاس|محطة|محطه|cargas/i.test(str)) {
+        if (/كارجاس|غازتك|طاقة|ماستر|محطة|محطه|cargas|gastec|taqa|master/i.test(str)) {
           cargasHints++;
         }
       }
@@ -773,7 +778,8 @@ function inferNameColumnFromData(
 export class ExcelParser {
   static async parseExcelOrCsv(
     file: File,
-    mappingOverride?: ColumnMappingOverride
+    mappingOverride?: ColumnMappingOverride,
+    parseOptions?: ParseOptions
   ): Promise<ParseResult> {
     const errors: string[] = [];
     const stations: Station[] = [];
@@ -1196,6 +1202,26 @@ export class ExcelParser {
           return;
         }
 
+        const fallbackCompany = (parseOptions?.defaultCompany || '').trim() || 'كارجاس';
+        const rawCompanyFromFile = getVal([
+          'الشركة',
+          'الشركه',
+          'اسم الشركة',
+          'اسم الشركه',
+          'شركة',
+          'شركه',
+          'الجهة',
+          'company',
+          'brand',
+          'operator',
+        ]);
+        const stationCompany =
+          parseOptions?.overrideCompany && parseOptions?.defaultCompany?.trim()
+            ? parseOptions.defaultCompany.trim()
+            : rawCompanyFromFile !== undefined && String(rawCompanyFromFile).trim()
+              ? String(rawCompanyFromFile).trim()
+              : fallbackCompany;
+
         // 5. Preserve exact station name verbatim as it appears in the table (no prefix/suffix/modification)
         const rawName = detectedNameCol ? row[detectedNameCol] : undefined;
         const verbatimName =
@@ -1205,7 +1231,7 @@ export class ExcelParser {
         if (!verbatimName) {
           syntheticNameCount++;
         }
-        const stationName = verbatimName !== '' ? verbatimName : `محطة كارجاس ${index + 1}`;
+        const stationName = verbatimName !== '' ? verbatimName : `محطة ${stationCompany} ${index + 1}`;
 
         // 6. Metadata fields
         const rawGov = (detectedGovCol ? row[detectedGovCol] : undefined) || 'القاهرة';
@@ -1222,9 +1248,6 @@ export class ExcelParser {
 
         const rawNotes =
           getVal(['ملاحظات', 'ملاحظة', 'ملاحظه', 'notes', 'desc', 'description']) || '';
-
-        const rawCompany =
-          getVal(['الشركة', 'الشركه', 'شركة', 'شركه', 'الجهة', 'company', 'brand']) || 'كارجاس';
 
         const parseBool = (val: any): boolean => {
           if (val === undefined || val === null || val === '') return false;
@@ -1265,7 +1288,7 @@ export class ExcelParser {
           id: `station-${index + 1}-${Math.random().toString(36).substring(2, 6)}`,
           name: stationName,
           stationName,
-          company: String(rawCompany).trim() || 'كارجاس',
+          company: stationCompany,
           governorate: String(rawGov).trim() || 'القاهرة',
           city: String(rawCity).trim(),
           address: String(rawAddress).trim(),
@@ -1348,11 +1371,13 @@ export class ExcelParser {
     }
   }
 
-  static downloadSampleTemplate(): void {
+  static downloadSampleTemplate(companyName?: string): void {
+    const comp = (companyName || '').trim() || 'كارجاس';
+    const secondComp = comp === 'كارجاس' ? 'غازتك' : comp;
     const templateData = [
       {
-        'اسم المحطة': 'كارجاس - التجمع الخامس',
-        'الشركة': 'كارجاس',
+        'اسم المحطة': `${comp} - التجمع الخامس`,
+        'الشركة': comp,
         'المحافظة': 'القاهرة',
         'المدينة': 'التجمع الخامس',
         'العنوان': 'شارع التسعين الجنوبي بجوار الجامعة الأمريكية',
@@ -1368,8 +1393,8 @@ export class ExcelParser {
         'ملاحظات': 'محطة متكاملة تموين وفحص زيوت وتحويل',
       },
       {
-        'اسم المحطة': 'كارجاس - المعادي كورنيش النيل',
-        'الشركة': 'كارجاس',
+        'اسم المحطة': `${secondComp} - المعادي كورنيش النيل`,
+        'الشركة': secondComp,
         'المحافظة': 'القاهرة',
         'المدينة': 'المعادي',
         'العنوان': 'كورنيش النيل أمام مستشفى القوات المسلحة',
@@ -1388,22 +1413,23 @@ export class ExcelParser {
 
     const worksheet = XLSX.utils.json_to_sheet(templateData);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'محطات كارجاس');
-    XLSX.writeFile(workbook, 'نموذج_احداثيات_محطات_كارجاس.xlsx');
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'محطات الغاز');
+    XLSX.writeFile(workbook, 'نموذج_احداثيات_محطات_الغاز.xlsx');
   }
 
   static async parseStationFile(
     file: File,
-    mappingOverride?: ColumnMappingOverride
+    mappingOverride?: ColumnMappingOverride,
+    parseOptions?: ParseOptions
   ): Promise<ParseResult> {
     const fileName = (file.name || '').toLowerCase();
     if (fileName.endsWith('.kmz') || fileName.endsWith('.kml')) {
-      return this.parseKmzOrKml(file);
+      return this.parseKmzOrKml(file, parseOptions);
     }
-    return this.parseExcelOrCsv(file, mappingOverride);
+    return this.parseExcelOrCsv(file, mappingOverride, parseOptions);
   }
 
-  static async parseKmzOrKml(file: File): Promise<ParseResult> {
+  static async parseKmzOrKml(file: File, parseOptions?: ParseOptions): Promise<ParseResult> {
     const errors: string[] = [];
     const stations: Station[] = [];
     let swappedCount = 0;
@@ -1433,6 +1459,7 @@ export class ExcelParser {
         name: string;
         description: string;
         coordsText: string;
+        folderName: string;
         extended: Record<string, string>;
       }> = [];
 
@@ -1443,6 +1470,18 @@ export class ExcelParser {
           const nameNode = node.getElementsByTagName('name')[0];
           const descNode = node.getElementsByTagName('description')[0];
           const coordNode = node.getElementsByTagName('coordinates')[0];
+          let folderName = '';
+          let parent: Element | null = node.parentElement;
+          while (parent) {
+            if (parent.tagName === 'Folder') {
+              const fn = parent.getElementsByTagName('name')[0]?.textContent?.trim();
+              if (fn) {
+                folderName = fn;
+                break;
+              }
+            }
+            parent = parent.parentElement;
+          }
           const extended: Record<string, string> = {};
 
           const dataNodes = Array.from(node.getElementsByTagName('Data'));
@@ -1462,6 +1501,7 @@ export class ExcelParser {
             name: (nameNode?.textContent || '').replace(/\r?\n+/g, ' ').trim(),
             description: (descNode?.textContent || '').replace(/<[^>]+>/g, ' ').trim(),
             coordsText: (coordNode?.textContent || '').trim(),
+            folderName,
             extended,
           });
         }
@@ -1478,10 +1518,20 @@ export class ExcelParser {
             name: extractTag('name').replace(/\r?\n+/g, ' ').trim(),
             description: extractTag('description').replace(/<[^>]+>/g, ' ').trim(),
             coordsText: extractTag('coordinates'),
+            folderName: '',
             extended: {},
           });
         }
       }
+
+      const fallbackCompany = (parseOptions?.defaultCompany || '').trim() || 'كارجاس';
+      const detectKnownCompany = (txt: string): string | undefined => {
+        if (/غاز\s*تك|gastec/i.test(txt)) return 'غازتك';
+        if (/ماستر\s*غاز|master\s*gas/i.test(txt)) return 'ماستر غاز';
+        if (/طاقة\s*عربية|طاقه\s*عربيه|طاقة\s*غاز|taqa/i.test(txt)) return 'طاقة عربية';
+        if (/كارجاس|cargas/i.test(txt)) return 'كارجاس';
+        return undefined;
+      };
 
       placemarks.forEach((pm, index) => {
         const firstCoordTuple = pm.coordsText.split(/\s+/).find((t) => t.includes(',')) || '';
@@ -1495,7 +1545,7 @@ export class ExcelParser {
           return;
         }
 
-        const contextText = `${pm.name} ${pm.description} ${JSON.stringify(pm.extended)}`;
+        const contextText = `${pm.name} ${pm.description} ${pm.folderName} ${JSON.stringify(pm.extended)}`;
         const swapRes = fixEgyptLatLngSwap(lat, lng, contextText);
         lat = swapRes.lat;
         lng = swapRes.lng;
@@ -1506,9 +1556,24 @@ export class ExcelParser {
           return;
         }
 
+        const extendedCompany =
+          pm.extended['الشركة'] ||
+          pm.extended['الشركه'] ||
+          pm.extended['شركة'] ||
+          pm.extended['company'] ||
+          pm.extended['brand'] ||
+          pm.extended['operator'];
+        const stationCompany =
+          parseOptions?.overrideCompany && parseOptions?.defaultCompany?.trim()
+            ? parseOptions.defaultCompany.trim()
+            : extendedCompany?.trim() ||
+              parseOptions?.defaultCompany?.trim() ||
+              detectKnownCompany(`${pm.folderName} ${pm.name}`) ||
+              fallbackCompany;
+
         const verbatimName = pm.name || pm.extended['اسم المحطة'] || pm.extended['stationName'] || '';
         if (!verbatimName) syntheticNameCount++;
-        const stationName = verbatimName || `محطة كارجاس ${index + 1}`;
+        const stationName = verbatimName || `محطة ${stationCompany} ${index + 1}`;
 
         const governorate =
           pm.extended['المحافظة'] ||
@@ -1526,7 +1591,7 @@ export class ExcelParser {
           id: `kmz-station-${index + 1}-${Math.random().toString(36).substring(2, 6)}`,
           name: stationName,
           stationName,
-          company: pm.extended['الشركة'] || pm.extended['company'] || 'كارجاس',
+          company: stationCompany,
           governorate,
           city,
           address,
@@ -1559,7 +1624,7 @@ export class ExcelParser {
         errors,
         totalRows: placemarks.length,
         validRows: stations.length,
-        headers: ['name', 'governorate', 'lat', 'lng', 'address'],
+        headers: ['name', 'company', 'governorate', 'lat', 'lng', 'address'],
         sampleRows: stations.slice(0, 5),
         diagnostics: {
           uniqueCoordCount: uniqueCoords.size,

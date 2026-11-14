@@ -77,6 +77,16 @@ export function normalizeConfig(raw?: Partial<AppConfig> | null): AppConfig {
         : DEFAULT_APP_CONFIG.adminPassword,
     // Always disabled per user requirement: street map stays in bright street mode
     mapNightModeDisabled: true,
+    enableMultiCompanyMode: Boolean(raw?.enableMultiCompanyMode),
+    visibleCompanies: Array.isArray(raw?.visibleCompanies)
+      ? Array.from(
+          new Set(
+            raw.visibleCompanies
+              .map((c) => (typeof c === 'string' ? c.trim() : ''))
+              .filter(Boolean)
+          )
+        )
+      : [],
     userIcons: {
       nearestStation: iconsRaw.nearestStation ?? DEFAULT_USER_ICONS.nearestStation,
       offlineMap: iconsRaw.offlineMap ?? DEFAULT_USER_ICONS.offlineMap,
@@ -340,6 +350,8 @@ export interface AppConfig {
   splashStationLoadingText: string;
   adminPassword: string;
   mapNightModeDisabled: boolean;
+  enableMultiCompanyMode: boolean;
+  visibleCompanies: string[];
   userIcons: UserIconsVisibility;
 }
 
@@ -372,6 +384,8 @@ export const DEFAULT_APP_CONFIG: AppConfig = {
   splashStationLoadingText: 'جارٍ تحميل محطات كارجاس على الخريطة...',
   adminPassword: '0000',
   mapNightModeDisabled: true,
+  enableMultiCompanyMode: false,
+  visibleCompanies: [],
   userIcons: { ...DEFAULT_USER_ICONS },
 };
 

@@ -70,8 +70,8 @@ export class StationCardComponent {
           <div class="flex-1">
             <div class="flex items-center gap-2 mb-1 flex-wrap">
               <span class="inline-flex items-center gap-1.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-black px-2.5 py-1 rounded-full">
-                <img src="${s.logoUrl || StationStorage.getStationLogo() || DEFAULT_CARGAS_LOGO_DATA_URL}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Logo" class="w-4 h-4 rounded-full object-contain bg-slate-900" />
-                <span>${escapeHtml(s.company || 'كارجاس')}</span>
+                <img src="${StationStorage.getLogoForCompany(s.company, s.logoUrl)}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="${escapeHtml(s.company || 'كارجاس')}" class="w-4 h-4 rounded-full object-contain bg-slate-900" />
+                <span>${escapeHtml(StationStorage.normalizeCompanyName(s.company))}</span>
               </span>
               ${
                 s.operatingHours

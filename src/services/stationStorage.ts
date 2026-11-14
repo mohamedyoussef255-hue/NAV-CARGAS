@@ -12,6 +12,8 @@ import {
   DEFAULT_CARGAS_LOGO_DATA_URL,
   generateLogoSourceCode,
 } from '../assets/cargasLogo';
+import { BAKED_COMPANY_LOGOS } from '../assets/companyLogos';
+import { AppConfig } from '../config/appConfig';
 import { AppConfigService } from './appConfigService';
 
 const STORAGE_KEY_STATIONS = 'cargas_stations_list_v1';
@@ -21,6 +23,9 @@ const STORAGE_KEY_BUNDLED_SIG = 'cargas_bundled_sig_v1';
 const STORAGE_KEY_USER_MODIFIED = 'cargas_stations_user_modified_v1';
 const STORAGE_KEY_APP_LOGO = 'cargas_app_logo_v2';
 const STORAGE_KEY_STATION_LOGO = 'cargas_station_logo_v2';
+const STORAGE_KEY_COMPANY_LOGOS = 'cargas_company_logos_v1';
+const STORAGE_KEY_BAKED_COMPANY_LOGOS_SIG = 'cargas_baked_company_logos_sig_v1';
+const STORAGE_KEY_COMPANY_LOGOS_USER_MODIFIED = 'cargas_company_logos_user_modified_v1';
 const STORAGE_KEY_THEME = 'cargas_theme_mode_v1';
 
 const META_KEY_SEEDED = 'stations_seeded_v1';
@@ -30,11 +35,15 @@ const META_KEY_BUNDLED_SIG = 'bundled_sig_v1';
 const META_KEY_USER_MODIFIED = 'stations_user_modified_v1';
 const META_KEY_APP_LOGO = 'app_logo_v2';
 const META_KEY_STATION_LOGO = 'station_logo_v2';
+const META_KEY_COMPANY_LOGOS = 'company_logos_v1';
+const META_KEY_BAKED_COMPANY_LOGOS_SIG = 'baked_company_logos_sig_v1';
+const META_KEY_COMPANY_LOGOS_USER_MODIFIED = 'company_logos_user_modified_v1';
 
 const STATIONS_UPDATED_EVENT = 'cargas:stations:updated';
 const THEME_CHANGED_EVENT = 'cargas:theme:changed';
 const APP_LOGO_CHANGED_EVENT = 'cargas:app-logo:changed';
 const STATION_LOGO_CHANGED_EVENT = 'cargas:station-logo:changed';
+const COMPANY_LOGOS_CHANGED_EVENT = 'cargas:company-logos:changed';
 
 function isDevEnvironment(): boolean {
   return Boolean(import.meta.env.DEV);
@@ -44,6 +53,25 @@ function dispatchSafe(eventName: string, detail: unknown): void {
   if (typeof window !== 'undefined' && typeof CustomEvent !== 'undefined') {
     window.dispatchEvent(new CustomEvent(eventName, { detail }));
   }
+}
+
+function computeCompanyLogosSignature(logos: Record<string, string>): string {
+  const keys = Object.keys(logos).sort();
+  if (keys.length === 0) return '0';
+  return keys.map((k) => `${k}:${logos[k]?.length || 0}:${logos[k]?.slice(0, 32) || ''}`).join('|');
+}
+
+function sanitizeCompanyLogosMap(raw: unknown): Record<string, string> {
+  const clean: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return clean;
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const company = String(k || '').replace(/\s+/g, ' ').trim();
+    const logo = typeof v === 'string' ? v.trim() : '';
+    if (company && logo) {
+      clean[company] = logo;
+    }
+  }
+  return clean;
 }
 
 function computeStationsSignature(list: Station[]): string {
@@ -70,8 +98,24 @@ export class StationStorage {
   private static memoryStations: Station[] | null = null;
   private static memoryAppLogo: string | null = null;
   private static memoryStationLogo: string | null = null;
+  private static memoryCompanyLogos: Record<string, string> | null = null;
   private static idbWriteQueue: Promise<unknown> = Promise.resolve();
   private static sourceWriteQueue: Promise<unknown> = Promise.resolve();
+
+  static normalizeCompanyName(company?: string | null): string {
+    const cleaned = String(company ?? '').replace(/\s+/g, ' ').trim();
+    return cleaned || 'كارجاس';
+  }
+
+  static normalizeCompanyKey(company?: string | null): string {
+    return this.normalizeCompanyName(company)
+      .toLowerCase()
+      .replace(/[أإآٱ]/g, 'ا')
+      .replace(/ة/g, 'ه')
+      .replace(/ى/g, 'ي')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
 
   private static enqueueIdbWrite(task: () => Promise<void>): void {
     this.idbWriteQueue = this.idbWriteQueue
@@ -93,7 +137,8 @@ export class StationStorage {
   static normalizeStation(raw: Station, fallbackIndex = 0): Station {
     const rawName = raw?.name ?? raw?.stationName ?? '';
     const rawStationName = raw?.stationName ?? raw?.name ?? '';
-    const stationName = String(rawStationName || rawName || `محطة كارجاس #${fallbackIndex + 1}`);
+    const company = this.normalizeCompanyName(raw?.company);
+    const stationName = String(rawStationName || rawName || `محطة ${company} #${fallbackIndex + 1}`);
     const name = String(rawName || stationName);
 
     const parsedLat = parseCoordinate(raw?.lat ?? raw?.latitude);
@@ -102,7 +147,6 @@ export class StationStorage {
     const governorate = raw?.governorate !== undefined && raw?.governorate !== null ? String(raw.governorate) : '';
     const city = raw?.city !== undefined && raw?.city !== null ? String(raw.city) : '';
     const address = raw?.address !== undefined && raw?.address !== null ? String(raw.address) : '';
-    const company = raw?.company ? String(raw.company) : 'كارجاس';
     const phone = raw?.phone !== undefined && raw?.phone !== null ? String(raw.phone) : '';
     const operatingHours =
       raw?.operatingHours !== undefined && raw?.operatingHours !== null ? String(raw.operatingHours) : '';
@@ -200,16 +244,31 @@ export class StationStorage {
 
       const hasUserModifications = Boolean(idbUserModified || lsUserModified);
 
-      // Always ensure bundled/active app & station logos are seeded and preserved in IndexedDB + LocalStorage
-      const [idbAppLogo, idbStationLogo] = await Promise.all([
-        StationDb.getMeta<string>(META_KEY_APP_LOGO),
-        StationDb.getMeta<string>(META_KEY_STATION_LOGO),
-      ]);
+      // Always ensure bundled/active app, station & per-company logos are seeded and preserved in IndexedDB + LocalStorage
+      const bakedCompanyLogos = sanitizeCompanyLogosMap(BAKED_COMPANY_LOGOS);
+      const bakedCompanyLogosSig = computeCompanyLogosSignature(bakedCompanyLogos);
+      const [idbAppLogo, idbStationLogo, idbCompanyLogos, idbCompanySig, idbCompanyModified] =
+        await Promise.all([
+          StationDb.getMeta<string>(META_KEY_APP_LOGO),
+          StationDb.getMeta<string>(META_KEY_STATION_LOGO),
+          StationDb.getMeta<Record<string, string>>(META_KEY_COMPANY_LOGOS),
+          StationDb.getMeta<string>(META_KEY_BAKED_COMPANY_LOGOS_SIG),
+          StationDb.getMeta<boolean>(META_KEY_COMPANY_LOGOS_USER_MODIFIED),
+        ]);
       let lsAppLogo: string | null = null;
       let lsStationLogo: string | null = null;
+      let lsCompanyLogos: Record<string, string> | null = null;
+      let lsCompanySig: string | null = null;
+      let lsCompanyModified = false;
       try {
         lsAppLogo = localStorage.getItem(STORAGE_KEY_APP_LOGO);
         lsStationLogo = localStorage.getItem(STORAGE_KEY_STATION_LOGO);
+        lsCompanySig = localStorage.getItem(STORAGE_KEY_BAKED_COMPANY_LOGOS_SIG);
+        lsCompanyModified = localStorage.getItem(STORAGE_KEY_COMPANY_LOGOS_USER_MODIFIED) === 'true';
+        const rawCompanyLogos = localStorage.getItem(STORAGE_KEY_COMPANY_LOGOS);
+        if (rawCompanyLogos !== null) {
+          lsCompanyLogos = sanitizeCompanyLogosMap(JSON.parse(rawCompanyLogos));
+        }
       } catch {
         // ignore
       }
@@ -220,6 +279,35 @@ export class StationStorage {
         lsStationLogo || idbStationLogo || BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
       this.memoryAppLogo = resolvedAppLogo;
       this.memoryStationLogo = resolvedStationLogo;
+
+      const hasCompanyLogoModifications = Boolean(idbCompanyModified || lsCompanyModified);
+      const storedCompanySig = idbCompanySig || lsCompanySig;
+      let resolvedCompanyLogos: Record<string, string>;
+      if (!isDev && !hasCompanyLogoModifications && storedCompanySig && storedCompanySig !== bakedCompanyLogosSig) {
+        resolvedCompanyLogos = bakedCompanyLogos;
+      } else if (lsCompanyLogos && Object.keys(lsCompanyLogos).length > 0) {
+        resolvedCompanyLogos = lsCompanyLogos;
+      } else if (idbCompanyLogos && Object.keys(idbCompanyLogos).length > 0) {
+        resolvedCompanyLogos = sanitizeCompanyLogosMap(idbCompanyLogos);
+      } else {
+        resolvedCompanyLogos = bakedCompanyLogos;
+      }
+      this.memoryCompanyLogos = resolvedCompanyLogos;
+      try {
+        localStorage.setItem(STORAGE_KEY_COMPANY_LOGOS, JSON.stringify(resolvedCompanyLogos));
+        localStorage.setItem(STORAGE_KEY_BAKED_COMPANY_LOGOS_SIG, bakedCompanyLogosSig);
+      } catch {
+        // ignore
+      }
+      this.enqueueIdbWrite(async () => {
+        await StationDb.setMeta(META_KEY_COMPANY_LOGOS, resolvedCompanyLogos);
+        await StationDb.setMeta(META_KEY_BAKED_COMPANY_LOGOS_SIG, bakedCompanyLogosSig);
+        await StationDb.setMeta(META_KEY_COMPANY_LOGOS_USER_MODIFIED, hasCompanyLogoModifications);
+      });
+      if (isDev && computeCompanyLogosSignature(resolvedCompanyLogos) !== bakedCompanyLogosSig) {
+        void this.saveCompanyLogosToSourceCode(resolvedCompanyLogos);
+      }
+      dispatchSafe(COMPANY_LOGOS_CHANGED_EVENT, resolvedCompanyLogos);
 
       if (!idbAppLogo || idbAppLogo !== resolvedAppLogo) {
         this.enqueueIdbWrite(async () => {
@@ -673,6 +761,214 @@ export class StationStorage {
     }
   }
 
+  // ==========================================
+  // 3. Per-Company Logos & Filtering (Multi-Company Support)
+  // ==========================================
+  static getCompanyLogos(): Record<string, string> {
+    if (this.memoryCompanyLogos) {
+      return { ...this.memoryCompanyLogos };
+    }
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_COMPANY_LOGOS);
+      if (stored !== null) {
+        const parsed = sanitizeCompanyLogosMap(JSON.parse(stored));
+        this.memoryCompanyLogos = parsed;
+        return { ...parsed };
+      }
+    } catch {
+      // ignore
+    }
+    const baked = sanitizeCompanyLogosMap(BAKED_COMPANY_LOGOS);
+    this.memoryCompanyLogos = baked;
+    return { ...baked };
+  }
+
+  static getLogoForCompany(company?: string | null, stationLogoUrl?: string | null): string {
+    if (stationLogoUrl && String(stationLogoUrl).trim()) {
+      return String(stationLogoUrl).trim();
+    }
+    const targetKey = this.normalizeCompanyKey(company);
+    const logos = this.getCompanyLogos();
+    for (const [k, v] of Object.entries(logos)) {
+      if (this.normalizeCompanyKey(k) === targetKey && v) {
+        return v;
+      }
+    }
+    return this.getStationLogo() || DEFAULT_CARGAS_LOGO_DATA_URL;
+  }
+
+  static saveCompanyLogo(
+    company: string,
+    logoDataUrl: string | null,
+    options?: { skipSourceSync?: boolean }
+  ): Record<string, string> {
+    const cleanName = this.normalizeCompanyName(company);
+    const targetKey = this.normalizeCompanyKey(cleanName);
+    const nextMap = { ...this.getCompanyLogos() };
+
+    for (const existingKey of Object.keys(nextMap)) {
+      if (this.normalizeCompanyKey(existingKey) === targetKey) {
+        delete nextMap[existingKey];
+      }
+    }
+
+    if (logoDataUrl && logoDataUrl.trim()) {
+      nextMap[cleanName] = logoDataUrl.trim();
+    }
+
+    const bakedSig = computeCompanyLogosSignature(sanitizeCompanyLogosMap(BAKED_COMPANY_LOGOS));
+    this.memoryCompanyLogos = nextMap;
+
+    try {
+      localStorage.setItem(STORAGE_KEY_COMPANY_LOGOS, JSON.stringify(nextMap));
+      localStorage.setItem(STORAGE_KEY_BAKED_COMPANY_LOGOS_SIG, bakedSig);
+      localStorage.setItem(STORAGE_KEY_COMPANY_LOGOS_USER_MODIFIED, 'true');
+    } catch (e) {
+      console.error('Failed to save company logo to localStorage:', e);
+    }
+
+    this.enqueueIdbWrite(async () => {
+      await StationDb.setMeta(META_KEY_COMPANY_LOGOS, nextMap);
+      await StationDb.setMeta(META_KEY_BAKED_COMPANY_LOGOS_SIG, bakedSig);
+      await StationDb.setMeta(META_KEY_COMPANY_LOGOS_USER_MODIFIED, true);
+    });
+
+    dispatchSafe(COMPANY_LOGOS_CHANGED_EVENT, nextMap);
+
+    if (isDevEnvironment() && !options?.skipSourceSync && (typeof navigator === 'undefined' || navigator.onLine)) {
+      void this.saveCompanyLogosToSourceCode(nextMap);
+    }
+
+    return nextMap;
+  }
+
+  static onCompanyLogosUpdated(callback: (logos: Record<string, string>) => void): () => void {
+    const handler = (e: Event) => {
+      const customEvent = e as CustomEvent<Record<string, string>>;
+      callback(customEvent.detail || this.getCompanyLogos());
+    };
+    window.addEventListener(COMPANY_LOGOS_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(COMPANY_LOGOS_CHANGED_EVENT, handler);
+  }
+
+  static saveCompanyLogosToSourceCode(
+    logos?: Record<string, string>
+  ): Promise<{ success: boolean; count: number; message: string }> {
+    const map = sanitizeCompanyLogosMap(logos ?? this.getCompanyLogos());
+    return this.enqueueSourceWrite(async () => {
+      try {
+        const response = await fetch('/api/save-company-logos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ companyLogos: map }),
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        try {
+          localStorage.setItem(STORAGE_KEY_COMPANY_LOGOS_USER_MODIFIED, 'false');
+          localStorage.setItem(STORAGE_KEY_BAKED_COMPANY_LOGOS_SIG, computeCompanyLogosSignature(map));
+        } catch {
+          // ignore
+        }
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_COMPANY_LOGOS_USER_MODIFIED, false);
+          await StationDb.setMeta(META_KEY_BAKED_COMPANY_LOGOS_SIG, computeCompanyLogosSignature(map));
+        });
+        return {
+          success: true,
+          count: Object.keys(map).length,
+          message:
+            data.message || `تم حفظ شعارات (${Object.keys(map).length}) شركة في الكود المصدري بنجاح`,
+        };
+      } catch (e: any) {
+        console.warn('Direct company logos save via API failed:', e);
+        return {
+          success: false,
+          count: Object.keys(map).length,
+          message: e?.message || 'تعذر حفظ شعارات الشركات في الكود المصدري',
+        };
+      }
+    });
+  }
+
+  static generateCompanyLogosSourceCode(logos?: Record<string, string>): string {
+    const map = sanitizeCompanyLogosMap(logos ?? this.getCompanyLogos());
+    return `/**
+ * شعارات شركات الغاز الطبيعي المعتمدة والمثبتة في الكود المصدري
+ * تاريخ التحديث: ${new Date().toLocaleString('ar-EG')} (${new Date().toISOString()})
+ */
+export const BAKED_COMPANY_LOGOS: Record<string, string> = ${JSON.stringify(map, null, 2)};
+`;
+  }
+
+  static getUniqueCompanies(stations?: Station[], includeLogoKeys = false): string[] {
+    const list = stations ?? this.getStations();
+    const byKey = new Map<string, string>();
+    for (const s of list) {
+      const display = this.normalizeCompanyName(s.company);
+      const key = this.normalizeCompanyKey(display);
+      if (!byKey.has(key)) byKey.set(key, display);
+    }
+    if (includeLogoKeys) {
+      for (const k of Object.keys(this.getCompanyLogos())) {
+        const display = this.normalizeCompanyName(k);
+        const key = this.normalizeCompanyKey(display);
+        if (!byKey.has(key)) byKey.set(key, display);
+      }
+    }
+    if (byKey.size === 0) {
+      byKey.set(this.normalizeCompanyKey('كارجاس'), 'كارجاس');
+    }
+    return Array.from(byKey.values());
+  }
+
+  static filterStationsByVisibleCompanies(stations: Station[], config?: AppConfig): Station[] {
+    const cfg = config ?? AppConfigService.getConfig();
+    if (!Array.isArray(cfg.visibleCompanies) || cfg.visibleCompanies.length === 0) {
+      return stations;
+    }
+    const allowedKeys = new Set(cfg.visibleCompanies.map((c) => this.normalizeCompanyKey(c)));
+    return stations.filter((s) => allowedKeys.has(this.normalizeCompanyKey(s.company)));
+  }
+
+  static getVisibleCompanyBrands(
+    stations?: Station[],
+    config?: AppConfig
+  ): Array<{ company: string; logo: string }> {
+    const cfg = config ?? AppConfigService.getConfig();
+    const allCompanies = this.getUniqueCompanies(stations, true);
+    const byKeyDisplay = new Map<string, string>();
+    for (const c of allCompanies) {
+      byKeyDisplay.set(this.normalizeCompanyKey(c), c);
+    }
+
+    let targetCompanies: string[];
+    if (Array.isArray(cfg.visibleCompanies) && cfg.visibleCompanies.length > 0) {
+      const seen = new Set<string>();
+      targetCompanies = [];
+      for (const raw of cfg.visibleCompanies) {
+        const display = this.normalizeCompanyName(raw);
+        const key = this.normalizeCompanyKey(display);
+        if (!seen.has(key)) {
+          seen.add(key);
+          targetCompanies.push(byKeyDisplay.get(key) || display);
+        }
+      }
+      if (targetCompanies.length === 0) {
+        targetCompanies = allCompanies;
+      }
+    } else {
+      targetCompanies = allCompanies;
+    }
+
+    return targetCompanies.map((company) => ({
+      company,
+      logo: this.getLogoForCompany(company),
+    }));
+  }
+
   static async commitAllEditsToSourceCode(): Promise<{ success: boolean; count: number; message: string }> {
     const stations = this.getStations();
     const stationsRes = await this.saveStationsToSourceCode(stations);
@@ -680,6 +976,7 @@ export class StationStorage {
     const stationLogo = this.getStationLogo();
     await this.saveLogoToSourceCode(appLogo === DEFAULT_CARGAS_LOGO_DATA_URL ? '' : appLogo, 'app');
     await this.saveLogoToSourceCode(stationLogo === DEFAULT_CARGAS_LOGO_DATA_URL ? '' : stationLogo, 'station');
+    await this.saveCompanyLogosToSourceCode();
     await AppConfigService.saveConfigToSourceCode();
     return stationsRes;
   }

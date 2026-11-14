@@ -2,6 +2,9 @@ import { Station, UserLocation } from '../types';
 import { LocationService } from '../services/locationService';
 import { SoundService } from '../services/soundService';
 import { ToastService } from '../services/toastService';
+import { StationStorage } from '../services/stationStorage';
+import { AppConfigService } from '../services/appConfigService';
+import { DEFAULT_CARGAS_LOGO_DATA_URL } from '../assets/cargasLogo';
 import { escapeHtml } from '../utils/html';
 import { normalizeArabicSearch } from '../utils/arabicSearch';
 import { getStationNavigationUrls, canLaunchNativeGeoUri } from '../utils/navigationLinks';
@@ -17,6 +20,7 @@ export class StationListModalComponent {
   private secretTapController: SecretTapController;
   private searchQuery = '';
   private selectedGov = 'all';
+  private selectedCompany = 'all';
   private selectedService = 'all';
 
   constructor(
@@ -56,6 +60,7 @@ export class StationListModalComponent {
   showWithQuery(query: string): void {
     this.searchQuery = query;
     this.selectedGov = 'all';
+    this.selectedCompany = 'all';
     this.selectedService = 'all';
     this.container.classList.remove('hidden');
     this.render();
@@ -68,6 +73,15 @@ export class StationListModalComponent {
   }
 
   private render(): void {
+    const cfg = AppConfigService.getConfig();
+    const companies = StationStorage.getUniqueCompanies(this.stations, false);
+    if (
+      this.selectedCompany !== 'all' &&
+      !companies.some((c) => StationStorage.normalizeCompanyKey(c) === StationStorage.normalizeCompanyKey(this.selectedCompany))
+    ) {
+      this.selectedCompany = 'all';
+    }
+
     const govs = Array.from(
       new Set(this.stations.map((s) => (s.governorate || '').trim()).filter(Boolean))
     );
@@ -89,6 +103,11 @@ export class StationListModalComponent {
       const gov = (s.governorate || '').trim();
       const matchGov = this.selectedGov === 'all' || gov === this.selectedGov;
 
+      const matchCompany =
+        this.selectedCompany === 'all' ||
+        StationStorage.normalizeCompanyKey(s.company) ===
+          StationStorage.normalizeCompanyKey(this.selectedCompany);
+
       const svc = s.services || {
         hasConversionCenter: false,
         hasLubeCenter: false,
@@ -107,13 +126,18 @@ export class StationListModalComponent {
         matchService = Boolean(svc.hasCylinderTesting);
       }
 
-      return matchSearch && matchGov && matchService;
+      return matchSearch && matchGov && matchCompany && matchService;
     });
 
     const hasActiveFilters =
       Boolean(this.searchQuery.trim()) ||
       this.selectedGov !== 'all' ||
+      this.selectedCompany !== 'all' ||
       this.selectedService !== 'all';
+
+    const modalTitle = cfg.enableMultiCompanyMode
+      ? 'دليل محطات الغاز الطبيعي'
+      : 'دليل محطات الغاز وكارجاس';
 
     this.container.innerHTML = `
       <div class="modal-backdrop fixed inset-0 bg-black/70 backdrop-blur-sm z-[1100] flex items-center justify-center p-3 sm:p-5">
@@ -127,7 +151,7 @@ export class StationListModalComponent {
               </div>
               <div>
                 <h3 class="text-base sm:text-lg font-black text-white">
-                  دليل محطات الغاز وكارجاس
+                  ${modalTitle}
                 </h3>
                 <p class="text-xs text-slate-400">
                   إجمالي ${this.stations.length} محطة مسجلة • عرض ${filtered.length} محطة مرتبة حسب الأقرب لموقعك
@@ -189,6 +213,21 @@ export class StationListModalComponent {
                 ${govs.map((g) => `<option value="${escapeHtml(g)}" ${this.selectedGov === g ? 'selected' : ''}>${escapeHtml(g)}</option>`).join('')}
               </select>
 
+              ${
+                companies.length > 1
+                  ? `
+                <!-- Company Selector -->
+                <select 
+                  id="filter-company-select" 
+                  class="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-emerald-300 font-bold focus:outline-none focus:border-emerald-500 font-cairo"
+                >
+                  <option value="all">كل الشركات (${companies.length})</option>
+                  ${companies.map((c) => `<option value="${escapeHtml(c)}" ${StationStorage.normalizeCompanyKey(this.selectedCompany) === StationStorage.normalizeCompanyKey(c) ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+                </select>
+              `
+                  : ''
+              }
+
               <!-- Service Filter Chips -->
               <div class="flex items-center gap-1.5 shrink-0">
                 <button data-service="all" class="filter-chip ${this.selectedService === 'all' ? 'active' : ''} px-3 py-1.5 rounded-xl border text-xs font-bold transition-all">
@@ -249,6 +288,8 @@ export class StationListModalComponent {
                         hasCanopyOil: false,
                         hasFastService: false,
                       };
+                      const companyName = StationStorage.normalizeCompanyName(station.company);
+                      const companyLogo = StationStorage.getLogoForCompany(companyName, station.logoUrl);
                       return `
                   <div 
                     class="station-item-card glass-panel hover:border-emerald-500/60 p-3 sm:p-4 rounded-2xl border border-white/5 cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] flex items-center justify-between gap-3 group"
@@ -256,8 +297,9 @@ export class StationListModalComponent {
                   >
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2 mb-1 flex-wrap">
-                        <span class="text-xs font-black text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                          ${escapeHtml(station.company || 'كارجاس')}
+                        <span class="inline-flex items-center gap-1.5 text-xs font-black text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                          <img src="${companyLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="${escapeHtml(companyName)}" class="w-4 h-4 rounded-full object-contain bg-slate-900" />
+                          <span>${escapeHtml(companyName)}</span>
                         </span>
                         <span class="text-[11px] text-slate-400">
                           📍 ${escapeHtml(station.governorate || 'مصر')} ${station.city ? `• ${escapeHtml(station.city)}` : ''}
@@ -358,6 +400,7 @@ export class StationListModalComponent {
       SoundService.playChime('click');
       this.searchQuery = '';
       this.selectedGov = 'all';
+      this.selectedCompany = 'all';
       this.selectedService = 'all';
       this.render();
     };
@@ -386,6 +429,12 @@ export class StationListModalComponent {
     const govSelect = this.container.querySelector('#filter-gov-select') as HTMLSelectElement;
     govSelect?.addEventListener('change', (e) => {
       this.selectedGov = (e.target as HTMLSelectElement).value;
+      this.render();
+    });
+
+    const companySelect = this.container.querySelector('#filter-company-select') as HTMLSelectElement;
+    companySelect?.addEventListener('change', (e) => {
+      this.selectedCompany = (e.target as HTMLSelectElement).value;
       this.render();
     });
 
