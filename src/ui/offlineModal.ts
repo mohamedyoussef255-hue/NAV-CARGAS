@@ -1,5 +1,6 @@
 import {
   EGYPT_OFFLINE_BOUNDS,
+  MapLayerStyle,
   OfflineMapService,
   OfflineTileProgress,
   TileDownloadBounds,
@@ -23,6 +24,7 @@ export class OfflineModalComponent {
   private abortController: AbortController | null = null;
   private progress: OfflineTileProgress | null = null;
   private cachedCount = 0;
+  private selectedStyle: MapLayerStyle = 'streets';
   private showInstallGuideMode: 'none' | 'ios' | 'manual' = 'none';
 
   constructor(
@@ -35,8 +37,11 @@ export class OfflineModalComponent {
     this.getMapBoundsCallback = handlers.getMapBounds;
   }
 
-  async showMapDownloader(): Promise<void> {
+  async showMapDownloader(preferredStyle?: MapLayerStyle): Promise<void> {
     this.showInstallGuideMode = 'none';
+    if (preferredStyle) {
+      this.selectedStyle = preferredStyle;
+    }
     this.cachedCount = await OfflineMapService.getCachedTileCount();
     this.container.classList.remove('hidden');
     this.render();
@@ -70,11 +75,11 @@ export class OfflineModalComponent {
           <div class="p-4 sm:p-5 bg-gradient-to-l from-slate-900 to-emerald-950 border-b border-white/10 flex items-center justify-between">
             <div class="flex items-center gap-3">
               <div class="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center text-xl">
-                🗺️
+                ${this.selectedStyle === 'satellite' ? '🛰️' : '🗺️'}
               </div>
               <div>
-                <h3 class="text-base font-black text-white">تحميل خريطة مصر للعمل أوفلاين</h3>
-                <p class="text-[11px] text-emerald-300">حفظ خرائط الشوارع للعمل بدون إنترنت على الهاتف</p>
+                <h3 class="text-base font-black text-white">تحميل الخريطة للعمل أوفلاين</h3>
+                <p class="text-[11px] text-emerald-300">حفظ خرائط الشوارع أو القمر الصناعي للعمل بدون إنترنت على الهاتف</p>
               </div>
             </div>
             <button id="btn-close-offline-modal" class="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-white/10 transition-colors">
@@ -97,10 +102,40 @@ export class OfflineModalComponent {
               </div>
             </div>
 
+            <!-- Layer Type Selector (Streets / Satellite) -->
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                id="btn-offline-style-streets"
+                ${this.isDownloading ? 'disabled' : ''}
+                class="py-2.5 px-3 rounded-2xl font-bold border transition-all flex items-center justify-center gap-1.5 ${
+                  this.selectedStyle === 'streets'
+                    ? 'bg-emerald-600/25 border-emerald-400 text-emerald-200 shadow'
+                    : 'bg-slate-900/60 border-white/10 text-slate-400 hover:text-white'
+                }"
+              >
+                <span>🗺️</span>
+                <span>خرائط الشوارع</span>
+              </button>
+              <button
+                type="button"
+                id="btn-offline-style-satellite"
+                ${this.isDownloading ? 'disabled' : ''}
+                class="py-2.5 px-3 rounded-2xl font-bold border transition-all flex items-center justify-center gap-1.5 ${
+                  this.selectedStyle === 'satellite'
+                    ? 'bg-emerald-600/25 border-emerald-400 text-emerald-200 shadow'
+                    : 'bg-slate-900/60 border-white/10 text-slate-400 hover:text-white'
+                }"
+              >
+                <span>🛰️</span>
+                <span>قمر صناعي (Satellite)</span>
+              </button>
+            </div>
+
             <!-- Egypt Coverage Specs -->
             <div class="p-3.5 rounded-2xl bg-slate-800/40 border border-white/10 space-y-1.5 text-slate-300 leading-relaxed">
               <div class="font-bold text-white flex items-center justify-between">
-                <span>نطاق خريطة جمهورية مصر العربية</span>
+                <span>نطاق خريطة جمهورية مصر العربية (${this.selectedStyle === 'satellite' ? 'قمر صناعي' : 'شوارع'})</span>
                 <span class="text-[11px] text-emerald-400 font-mono" dir="ltr">Zoom 6 – 12</span>
               </div>
               <div class="text-[11px] text-slate-400 font-mono" dir="ltr">
@@ -162,7 +197,7 @@ export class OfflineModalComponent {
                   class="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black py-3 rounded-2xl transition-all shadow-lg shadow-emerald-900/40 flex items-center justify-center gap-2"
                 >
                   <span>📥</span>
-                  <span>تحميل خريطة مصر كاملة أوفلاين (Zoom 6-12)</span>
+                  <span>تحميل ${this.selectedStyle === 'satellite' ? 'القمر الصناعي لمصر' : 'خريطة مصر للشوارع'} أوفلاين (Zoom 6-12)</span>
                 </button>
 
                 <div class="grid grid-cols-2 gap-2">
@@ -242,6 +277,20 @@ export class OfflineModalComponent {
       this.hide();
     });
 
+    this.container.querySelector('#btn-offline-style-streets')?.addEventListener('click', () => {
+      if (this.isDownloading) return;
+      SoundService.playChime('click');
+      this.selectedStyle = 'streets';
+      this.render();
+    });
+
+    this.container.querySelector('#btn-offline-style-satellite')?.addEventListener('click', () => {
+      if (this.isDownloading) return;
+      SoundService.playChime('click');
+      this.selectedStyle = 'satellite';
+      this.render();
+    });
+
     this.container.querySelector('#btn-download-egypt-map')?.addEventListener('click', () => {
       void this.startDownload(EGYPT_OFFLINE_BOUNDS);
     });
@@ -296,7 +345,8 @@ export class OfflineModalComponent {
           this.render();
         }
       },
-      this.abortController.signal
+      this.abortController.signal,
+      this.selectedStyle
     );
 
     this.isDownloading = false;

@@ -11,6 +11,7 @@ export interface UserIconsVisibility {
   zoomControls: boolean;
   fitAllStations: boolean;
   quickList: boolean;
+  mapLayerToggle: boolean;
 }
 
 export interface AppConfig {
@@ -36,6 +37,7 @@ export const DEFAULT_USER_ICONS: UserIconsVisibility = {
   zoomControls: true,
   fitAllStations: true,
   quickList: true,
+  mapLayerToggle: true,
 };
 
 export const DEFAULT_APP_CONFIG: AppConfig = {
@@ -70,6 +72,7 @@ export const BAKED_APP_CONFIG: AppConfig = {
     "recenterGps": true,
     "zoomControls": true,
     "fitAllStations": true,
-    "quickList": true
+    "quickList": true,
+    "mapLayerToggle": true
   }
 };

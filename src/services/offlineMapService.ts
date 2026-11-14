@@ -1,6 +1,10 @@
 import { StationDb } from './stationDb';
 
 export const OSM_TILE_CACHE_NAME = 'cargas-osm-tiles-v1';
+export const SATELLITE_TILE_CACHE_NAME = 'cargas-satellite-tiles-v1';
+
+export type MapLayerStyle = 'streets' | 'satellite';
+export type CacheTileKind = MapLayerStyle | 'satellite_labels';
 
 export interface TileDownloadBounds {
   minLat: number;
@@ -61,15 +65,27 @@ export function tile2lng(x: number, zoom: number): number {
 }
 
 export class OfflineMapService {
-  static getTileKey(z: number, x: number, y: number): string {
+  static getCacheName(style: CacheTileKind = 'streets'): string {
+    return style === 'streets' ? OSM_TILE_CACHE_NAME : SATELLITE_TILE_CACHE_NAME;
+  }
+
+  static getTileKey(z: number, x: number, y: number, style: CacheTileKind = 'streets'): string {
+    if (style === 'satellite') return `sat/${z}/${x}/${y}`;
+    if (style === 'satellite_labels') return `sat-labels/${z}/${x}/${y}`;
     return `${z}/${x}/${y}`;
   }
 
-  static getTileUrl(z: number, x: number, y: number): string {
+  static getTileUrl(z: number, x: number, y: number, style: CacheTileKind = 'streets'): string {
+    if (style === 'satellite') {
+      return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+    }
+    if (style === 'satellite_labels') {
+      return `https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`;
+    }
     return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
   }
 
-  static getTilesInBounds(bounds: TileDownloadBounds): TileCoord[] {
+  static getTilesInBounds(bounds: TileDownloadBounds, style: MapLayerStyle = 'streets'): TileCoord[] {
     const tiles: TileCoord[] = [];
     for (let z = bounds.minZoom; z <= bounds.maxZoom; z++) {
       const minX = Math.max(0, lng2tile(bounds.minLng, z));
@@ -83,8 +99,8 @@ export class OfflineMapService {
             z,
             x,
             y,
-            key: this.getTileKey(z, x, y),
-            url: this.getTileUrl(z, x, y),
+            key: this.getTileKey(z, x, y, style),
+            url: this.getTileUrl(z, x, y, style),
           });
         }
       }
@@ -108,8 +124,14 @@ export class OfflineMapService {
    * Reads a tile strictly from local device storage (IndexedDB first, then Cache API)
    * without touching the network.
    */
-  static async getCachedTileBlob(z: number, x: number, y: number, url: string): Promise<Blob | null> {
-    const key = this.getTileKey(z, x, y);
+  static async getCachedTileBlob(
+    z: number,
+    x: number,
+    y: number,
+    url: string,
+    style: CacheTileKind = 'streets'
+  ): Promise<Blob | null> {
+    const key = this.getTileKey(z, x, y, style);
 
     try {
       const idbBlob = await StationDb.getTile(key);
@@ -122,7 +144,7 @@ export class OfflineMapService {
 
     if (typeof caches !== 'undefined') {
       try {
-        const cache = await caches.open(OSM_TILE_CACHE_NAME);
+        const cache = await caches.open(this.getCacheName(style));
         const cached = await cache.match(url);
         if (cached && cached.type !== 'opaque') {
           const blob = await cached.blob();
@@ -143,9 +165,17 @@ export class OfflineMapService {
   /**
    * Saves a downloaded tile Blob to both IndexedDB and Cache API.
    */
-  static async saveTileBlob(z: number, x: number, y: number, url: string, blob: Blob): Promise<void> {
+  static async saveTileBlob(
+    z: number,
+    x: number,
+    y: number,
+    url: string,
+    blob: Blob,
+    style: CacheTileKind = 'streets'
+  ): Promise<void> {
     if (!blob || blob.size === 0) return;
-    const key = this.getTileKey(z, x, y);
+    const key = this.getTileKey(z, x, y, style);
+    const cacheName = this.getCacheName(style);
 
     const tasks: Promise<unknown>[] = [
       StationDb.putTile({ key, url, z, x, y, blob }).catch(() => false),
@@ -154,7 +184,7 @@ export class OfflineMapService {
     if (typeof caches !== 'undefined') {
       tasks.push(
         caches
-          .open(OSM_TILE_CACHE_NAME)
+          .open(cacheName)
           .then((cache) =>
             cache.put(
               url,
@@ -173,7 +203,8 @@ export class OfflineMapService {
 
   static async getCachedTileCount(): Promise<number> {
     let idbCount = 0;
-    let cacheCount = 0;
+    let osmCacheCount = 0;
+    let satCacheCount = 0;
 
     try {
       idbCount = await StationDb.getTileCount();
@@ -183,15 +214,20 @@ export class OfflineMapService {
 
     if (typeof caches !== 'undefined') {
       try {
-        const cache = await caches.open(OSM_TILE_CACHE_NAME);
-        const keys = await cache.keys();
-        cacheCount = keys.length;
+        const [osmCache, satCache] = await Promise.all([
+          caches.open(OSM_TILE_CACHE_NAME),
+          caches.open(SATELLITE_TILE_CACHE_NAME),
+        ]);
+        const [osmKeys, satKeys] = await Promise.all([osmCache.keys(), satCache.keys()]);
+        osmCacheCount = osmKeys.length;
+        satCacheCount = satKeys.length;
       } catch {
-        cacheCount = 0;
+        osmCacheCount = 0;
+        satCacheCount = 0;
       }
     }
 
-    return Math.max(idbCount, cacheCount);
+    return Math.max(idbCount, osmCacheCount + satCacheCount);
   }
 
   static async clearCachedTiles(): Promise<void> {
@@ -203,7 +239,10 @@ export class OfflineMapService {
 
     if (typeof caches !== 'undefined') {
       try {
-        await caches.delete(OSM_TILE_CACHE_NAME);
+        await Promise.all([
+          caches.delete(OSM_TILE_CACHE_NAME),
+          caches.delete(SATELLITE_TILE_CACHE_NAME),
+        ]);
       } catch {
         // ignore
       }
@@ -219,9 +258,10 @@ export class OfflineMapService {
   static async downloadTiles(
     bounds: TileDownloadBounds,
     onProgress: (progress: OfflineTileProgress) => void,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    style: MapLayerStyle = 'streets'
   ): Promise<OfflineTileProgress> {
-    const tiles = this.getTilesInBounds(bounds);
+    const tiles = this.getTilesInBounds(bounds, style);
     const total = tiles.length;
     let completed = 0;
     let cachedNow = 0;
@@ -260,8 +300,9 @@ export class OfflineMapService {
       return offlineState;
     }
 
+    const cacheName = this.getCacheName(style);
     const cache =
-      typeof caches !== 'undefined' ? await caches.open(OSM_TILE_CACHE_NAME).catch(() => null) : null;
+      typeof caches !== 'undefined' ? await caches.open(cacheName).catch(() => null) : null;
     const existingIdbKeys = await StationDb.getAllTileKeys().catch(() => new Set<string>());
     const existingCacheUrls = new Set<string>();
     if (cache) {
@@ -311,7 +352,7 @@ export class OfflineMapService {
 
             if (response && response.ok && response.type !== 'opaque') {
               const blob = await response.clone().blob();
-              await this.saveTileBlob(tile.z, tile.x, tile.y, tile.url, blob);
+              await this.saveTileBlob(tile.z, tile.x, tile.y, tile.url, blob, style);
               cachedNow++;
             } else if (response && response.type === 'opaque' && cache) {
               await cache.put(tile.url, response.clone());

@@ -6,8 +6,14 @@ import {
   UserIconsVisibility,
 } from '../config/appConfig';
 
+import { StationDb } from './stationDb';
+
 const STORAGE_KEY_CONFIG = 'cargas_app_config_v1';
 const STORAGE_KEY_BAKED_CONFIG_SIG = 'cargas_baked_config_sig_v1';
+const STORAGE_KEY_CONFIG_USER_MODIFIED = 'cargas_config_user_modified_v1';
+const META_KEY_CONFIG = 'app_config_v1';
+const META_KEY_BAKED_CONFIG_SIG = 'baked_config_sig_v1';
+const META_KEY_CONFIG_USER_MODIFIED = 'config_user_modified_v1';
 export const APP_CONFIG_UPDATED_EVENT = 'cargas-app-config-updated';
 
 const isDevEnvironment = (): boolean => Boolean(import.meta.env.DEV);
@@ -54,6 +60,7 @@ export function normalizeConfig(raw?: Partial<AppConfig> | null): AppConfig {
       zoomControls: iconsRaw.zoomControls ?? DEFAULT_USER_ICONS.zoomControls,
       fitAllStations: iconsRaw.fitAllStations ?? DEFAULT_USER_ICONS.fitAllStations,
       quickList: iconsRaw.quickList ?? DEFAULT_USER_ICONS.quickList,
+      mapLayerToggle: iconsRaw.mapLayerToggle ?? DEFAULT_USER_ICONS.mapLayerToggle,
     },
   };
 }
@@ -65,19 +72,14 @@ export class AppConfigService {
     if (this.memoryConfig) return this.memoryConfig;
 
     const baked = normalizeConfig(BAKED_APP_CONFIG);
-
-    // Production / Vercel / APK: always strictly use baked source config
-    if (!isDevEnvironment()) {
-      this.memoryConfig = baked;
-      return baked;
-    }
+    const currentBakedSig = computeConfigSignature(baked);
 
     try {
       const storedRaw = localStorage.getItem(STORAGE_KEY_CONFIG);
       const lastBakedSig = localStorage.getItem(STORAGE_KEY_BAKED_CONFIG_SIG);
-      const currentBakedSig = computeConfigSignature(baked);
+      const userModified = localStorage.getItem(STORAGE_KEY_CONFIG_USER_MODIFIED) === 'true';
 
-      if (lastBakedSig && lastBakedSig !== currentBakedSig) {
+      if (lastBakedSig && lastBakedSig !== currentBakedSig && !userModified) {
         localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(baked));
         localStorage.setItem(STORAGE_KEY_BAKED_CONFIG_SIG, currentBakedSig);
         this.memoryConfig = baked;
@@ -101,16 +103,69 @@ export class AppConfigService {
   }
 
   static async initializeConfigSync(): Promise<AppConfig> {
-    const current = this.getConfig();
     const baked = normalizeConfig(BAKED_APP_CONFIG);
+    const currentBakedSig = computeConfigSignature(baked);
+
+    try {
+      const [idbCfg, idbBakedSig, idbUserModified] = await Promise.all([
+        StationDb.getMeta<Partial<AppConfig>>(META_KEY_CONFIG),
+        StationDb.getMeta<string>(META_KEY_BAKED_CONFIG_SIG),
+        StationDb.getMeta<boolean>(META_KEY_CONFIG_USER_MODIFIED),
+      ]);
+
+      let lsRaw: string | null = null;
+      let lsUserModified = false;
+      try {
+        lsRaw = localStorage.getItem(STORAGE_KEY_CONFIG);
+        lsUserModified = localStorage.getItem(STORAGE_KEY_CONFIG_USER_MODIFIED) === 'true';
+      } catch {
+        // ignore
+      }
+
+      const hasUserModified = Boolean(idbUserModified || lsUserModified);
+      if (idbBakedSig && idbBakedSig !== currentBakedSig && !hasUserModified) {
+        this.memoryConfig = baked;
+        try {
+          localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(baked));
+          localStorage.setItem(STORAGE_KEY_BAKED_CONFIG_SIG, currentBakedSig);
+          localStorage.setItem(STORAGE_KEY_CONFIG_USER_MODIFIED, 'false');
+        } catch {
+          // ignore
+        }
+        void StationDb.setMeta(META_KEY_CONFIG, baked);
+        void StationDb.setMeta(META_KEY_BAKED_CONFIG_SIG, currentBakedSig);
+        void StationDb.setMeta(META_KEY_CONFIG_USER_MODIFIED, false);
+      } else if (!lsRaw && idbCfg) {
+        const hydrated = normalizeConfig(idbCfg);
+        this.memoryConfig = hydrated;
+        try {
+          localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(hydrated));
+          localStorage.setItem(STORAGE_KEY_BAKED_CONFIG_SIG, currentBakedSig);
+          localStorage.setItem(STORAGE_KEY_CONFIG_USER_MODIFIED, hasUserModified ? 'true' : 'false');
+        } catch {
+          // ignore
+        }
+      } else {
+        const current = this.getConfig();
+        if (!idbCfg) {
+          void StationDb.setMeta(META_KEY_CONFIG, current);
+          void StationDb.setMeta(META_KEY_BAKED_CONFIG_SIG, currentBakedSig);
+          void StationDb.setMeta(META_KEY_CONFIG_USER_MODIFIED, hasUserModified);
+        }
+      }
+    } catch {
+      // ignore IndexedDB fallback errors
+    }
+
+    const active = this.getConfig();
 
     if (isDevEnvironment() && (typeof navigator === 'undefined' || navigator.onLine)) {
-      if (computeConfigSignature(current) !== computeConfigSignature(baked)) {
-        await this.saveConfigToSourceCode(current);
+      if (computeConfigSignature(active) !== currentBakedSig) {
+        await this.saveConfigToSourceCode(active);
       }
     }
-    this.applyDocumentBranding(current);
-    return current;
+    this.applyDocumentBranding(active);
+    return active;
   }
 
   static saveConfig(
@@ -127,16 +182,20 @@ export class AppConfigService {
       },
     });
 
+    const currentBakedSig = computeConfigSignature(normalizeConfig(BAKED_APP_CONFIG));
     this.memoryConfig = merged;
 
-    if (isDevEnvironment()) {
-      try {
-        localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(merged));
-        localStorage.setItem(STORAGE_KEY_BAKED_CONFIG_SIG, computeConfigSignature(normalizeConfig(BAKED_APP_CONFIG)));
-      } catch (e) {
-        console.warn('Failed to persist app config to localStorage:', e);
-      }
+    try {
+      localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(merged));
+      localStorage.setItem(STORAGE_KEY_BAKED_CONFIG_SIG, currentBakedSig);
+      localStorage.setItem(STORAGE_KEY_CONFIG_USER_MODIFIED, 'true');
+    } catch (e) {
+      console.warn('Failed to persist app config to localStorage:', e);
     }
+
+    void StationDb.setMeta(META_KEY_CONFIG, merged).catch(() => undefined);
+    void StationDb.setMeta(META_KEY_BAKED_CONFIG_SIG, currentBakedSig).catch(() => undefined);
+    void StationDb.setMeta(META_KEY_CONFIG_USER_MODIFIED, true).catch(() => undefined);
 
     this.applyDocumentBranding(merged);
 
@@ -235,6 +294,7 @@ export class AppConfigService {
   zoomControls: boolean;
   fitAllStations: boolean;
   quickList: boolean;
+  mapLayerToggle: boolean;
 }
 
 export interface AppConfig {
@@ -260,6 +320,7 @@ export const DEFAULT_USER_ICONS: UserIconsVisibility = {
   zoomControls: true,
   fitAllStations: true,
   quickList: true,
+  mapLayerToggle: true,
 };
 
 export const DEFAULT_APP_CONFIG: AppConfig = {

@@ -8,13 +8,15 @@ import { SoundService } from './services/soundService';
 import { ToastService } from './services/toastService';
 import { PwaService } from './services/pwaService';
 
+import { DEFAULT_CARGAS_LOGO_DATA_URL } from './assets/cargasLogo';
+import { escapeHtml } from './utils/html';
 import { MapView } from './ui/mapView';
 import { MapSearchComponent } from './ui/mapSearch';
 import { HeaderComponent } from './ui/header';
 import { StationCardComponent } from './ui/stationCard';
 import { NavigationHudComponent } from './ui/navigationHud';
 import { StationListModalComponent } from './ui/stationListModal';
-import type { AdminModalComponent } from './ui/adminModal';
+import { AdminModalComponent } from './ui/adminModal';
 import { LocationModalComponent } from './ui/locationModal';
 import { OfflineModalComponent } from './ui/offlineModal';
 
@@ -45,16 +47,56 @@ class CargasApp {
     this.stations = StationStorage.getStations();
     this.visibleStations = this.stations;
 
-    // 1. Setup DOM Containers
+    const initialAppLogo = StationStorage.getAppLogo();
+    const initialStationLogo = StationStorage.getStationLogo();
+
+    // 1. Setup DOM Containers + Dual-Logo Launch Splash Screen (3.5 seconds total)
     const appEl = document.getElementById('app') || document.body;
     appEl.innerHTML = `
+      <!-- 3.5s Dual-Logo Splash Screen: App Logo (0-1.75s) -> Cargas Station Logo (1.75-3.5s) -->
+      <div id="app-splash-screen" dir="rtl">
+        <div class="relative w-full max-w-sm flex flex-col items-center justify-center min-h-[260px]">
+          
+          <!-- Stage 1: App Logo -->
+          <div id="splash-stage-app" class="splash-stage flex flex-col items-center text-center gap-4">
+            <div class="w-32 h-32 sm:w-36 sm:h-36 rounded-3xl bg-slate-900/90 border-2 border-emerald-400/60 shadow-2xl shadow-emerald-500/20 p-4 flex items-center justify-center">
+              <img id="splash-app-logo-img" src="${initialAppLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="w-full h-full object-contain drop-shadow-xl" />
+            </div>
+            <div class="space-y-1">
+              <h2 id="splash-app-title" class="text-2xl sm:text-3xl font-black text-white tracking-tight">${escapeHtml(initialConfig.appName)}</h2>
+              ${initialConfig.appSubtitle ? `<p class="text-sm font-bold text-emerald-300">${escapeHtml(initialConfig.appSubtitle)}</p>` : ''}
+            </div>
+          </div>
+
+          <!-- Stage 2: Cargas Station Logo -->
+          <div id="splash-stage-station" class="splash-stage splash-stage-hidden absolute inset-0 flex flex-col items-center justify-center text-center gap-4">
+            <div class="relative w-32 h-32 sm:w-36 sm:h-36 rounded-full bg-gradient-to-br from-emerald-950 to-slate-900 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/30 p-4 flex items-center justify-center">
+              <img id="splash-station-logo-img" src="${initialStationLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Cargas Station Logo" class="w-full h-full object-contain drop-shadow-xl" />
+            </div>
+            <div class="space-y-1">
+              <div class="text-xl sm:text-2xl font-black text-emerald-300">محطات غاز كارجاس</div>
+              <p class="text-xs sm:text-sm font-bold text-slate-300">${escapeHtml(initialConfig.appDescription)}</p>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Animated 3.5s Progress Indicator -->
+        <div class="w-56 sm:w-64 mt-8 space-y-2 text-center">
+          <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+            <div class="splash-progress-bar h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 rounded-full"></div>
+          </div>
+          <div id="splash-status-label" class="text-[11px] font-bold text-slate-400">جارٍ تهيئة الخريطة وقاعدة المحطات...</div>
+        </div>
+      </div>
+
       <div id="header-container" class="relative z-40"></div>
       
-      <!-- Framed Map Wrapper with Street Details (Daylight street mode only) -->
+      <!-- Framed Map Wrapper with Street & Satellite Details (Night street mode permanently disabled) -->
       <div id="map-wrapper" class="relative w-full flex-1 overflow-hidden">
         <div id="map-container" class="w-full h-full"></div>
 
-        <!-- Top Map Overlay: Location Badge + Map Search Bar -->
+        <!-- Top Map Overlay: Location Badge + Map Search Bar + Satellite/Streets Switcher -->
         <div id="map-top-overlay">
           <!-- Interactive Current User Location Pill -->
           <button id="btn-current-location-badge" class="map-status-badge" title="اضغط لتحديد أو تغيير موقعك الحالي بدقة">
@@ -65,6 +107,12 @@ class CargasApp {
 
           <!-- Interactive Map Search Bar & Service Filter Chips -->
           <div id="map-search-container"></div>
+
+          <!-- Map Style Toggle: Streets <-> Satellite -->
+          <button id="btn-map-layer-toggle" class="map-style-switcher" title="التبديل بين خريطة الشوارع وخريطة القمر الصناعي">
+            <span id="map-layer-toggle-icon">🛰️</span>
+            <span id="map-layer-toggle-label">قمر صناعي</span>
+          </button>
         </div>
 
         ${import.meta.env.DEV ? `
@@ -144,7 +192,7 @@ class CargasApp {
       <!-- Station Search & Filter Modal -->
       <div id="list-modal-container" class="hidden"></div>
 
-      ${import.meta.env.DEV ? '<div id="admin-modal-container" class="hidden"></div>' : ''}
+      <div id="admin-modal-container" class="hidden"></div>
 
       <!-- Current Location Picker Modal -->
       <div id="location-modal-container" class="hidden"></div>
@@ -152,6 +200,8 @@ class CargasApp {
       <!-- Offline Map Downloader & PWA Install Guide Modal -->
       <div id="offline-modal-container" class="hidden"></div>
     `;
+
+    this.runLaunchSplashSequence();
 
     // 2. Initialize Theme
     const theme = StationStorage.getTheme();
@@ -185,15 +235,15 @@ class CargasApp {
     // 4. Initialize Header & Subscribe to PWA Network/Install State
     const headerContainer = document.getElementById('header-container')!;
     this.header = new HeaderComponent({
-      enableSecretAdmin: import.meta.env.DEV,
-      onTriggerAdmin: import.meta.env.DEV ? () => this.adminModal?.show() : undefined,
+      enableSecretAdmin: true,
+      onTriggerAdmin: () => this.adminModal?.show(),
       onFindNearest: () => void this.handleFindNearest(),
       onOpenList: () => this.listModal.show(),
       onToggleTheme: () => {
         const nextTheme = StationStorage.toggleTheme();
         this.map.setTheme(nextTheme);
       },
-      onOpenOfflineMap: () => void this.offlineModal.showMapDownloader(),
+      onOpenOfflineMap: () => void this.offlineModal.showMapDownloader(this.map.getTileStyle()),
       onInstallApp: async () => {
         const outcome = await PwaService.triggerInstall();
         if (outcome === 'accepted') {
@@ -248,40 +298,36 @@ class CargasApp {
       },
     });
 
-    // 8. Initialize Admin Modal ONLY in Development Mode (excluded from APK / production bundle)
-    if (import.meta.env.DEV) {
-      const adminModalContainer = document.getElementById('admin-modal-container');
-      if (adminModalContainer) {
-        void import('./ui/adminModal').then(({ AdminModalComponent }) => {
-          this.adminModal = new AdminModalComponent(adminModalContainer, {
-            onDataChanged: (focusedStation) => {
-              if (focusedStation && this.mapSearch.getActiveFilter() !== 'all') {
-                this.mapSearch.resetFilter();
-              }
-              this.refreshData();
-              if (focusedStation) {
-                void this.selectStation(focusedStation, true);
-              } else if (this.visibleStations.length > 0) {
-                this.map.fitToStations(this.visibleStations);
-              }
-            },
-            onLocateStation: (station) => {
-              if (this.mapSearch.getActiveFilter() !== 'all') {
-                this.mapSearch.resetFilter();
-              }
-              this.refreshData();
-              void this.selectStation(station, true);
-            },
-            onPickCoordsOnMap: (cb) => {
-              this.map.enablePickLocationOnMap((lat, lng) => cb(lat, lng));
-            },
-          });
-
-          const params = new URLSearchParams(window.location.search);
-          if (params.get('admin') === '1') {
-            this.adminModal.show('manage');
+    // 8. Initialize Secret Password-Protected Admin Modal (triggered by 5 taps on App Logo)
+    const adminModalContainer = document.getElementById('admin-modal-container');
+    if (adminModalContainer) {
+      this.adminModal = new AdminModalComponent(adminModalContainer, {
+        onDataChanged: (focusedStation) => {
+          if (focusedStation && this.mapSearch.getActiveFilter() !== 'all') {
+            this.mapSearch.resetFilter();
           }
-        });
+          this.refreshData();
+          if (focusedStation) {
+            void this.selectStation(focusedStation, true);
+          } else if (this.visibleStations.length > 0) {
+            this.map.fitToStations(this.visibleStations);
+          }
+        },
+        onLocateStation: (station) => {
+          if (this.mapSearch.getActiveFilter() !== 'all') {
+            this.mapSearch.resetFilter();
+          }
+          this.refreshData();
+          void this.selectStation(station, true);
+        },
+        onPickCoordsOnMap: (cb) => {
+          this.map.enablePickLocationOnMap((lat, lng) => cb(lat, lng));
+        },
+      });
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('admin') === '1') {
+        this.adminModal.show('manage');
       }
     }
 
@@ -335,7 +381,19 @@ class CargasApp {
       ToastService.show(`📍 تم تحديث موقعك إلى: ${district}`, 'success', 3000);
     });
 
-    // 11. Interactive Location Badge & Floating Map Controls Events
+    // 11. Interactive Location Badge, Street/Satellite Toggle & Floating Map Controls
+    this.syncMapLayerToggleUi();
+    document.getElementById('btn-map-layer-toggle')?.addEventListener('click', () => {
+      SoundService.playChime('click');
+      const nextStyle = this.map.toggleTileStyle();
+      this.syncMapLayerToggleUi();
+      ToastService.show(
+        nextStyle === 'satellite' ? '🛰️ تم التبديل إلى خريطة القمر الصناعي' : '🗺️ تم التبديل إلى خريطة الشوارع',
+        'info',
+        2200
+      );
+    });
+
     document.getElementById('btn-current-location-badge')?.addEventListener('click', () => {
       SoundService.playChime('click');
       this.locationModal.show();
@@ -462,10 +520,17 @@ class CargasApp {
     });
 
     void StationStorage.initializeOfflineStorage().then((seededStations) => {
+      const latestStationLogo = StationStorage.getStationLogo();
+      const latestAppLogo = StationStorage.getAppLogo();
+      const splashAppImg = document.getElementById('splash-app-logo-img') as HTMLImageElement | null;
+      const splashStationImg = document.getElementById('splash-station-logo-img') as HTMLImageElement | null;
+      if (splashAppImg && latestAppLogo) splashAppImg.src = latestAppLogo;
+      if (splashStationImg && latestStationLogo) splashStationImg.src = latestStationLogo;
+
       if (seededStations && seededStations.length > 0) {
         this.stations = seededStations;
-        this.map.setStationLogo(StationStorage.getStationLogo());
-        this.header.updateLogo(headerContainer, StationStorage.getAppLogo());
+        this.map.setStationLogo(latestStationLogo);
+        this.header.updateLogo(headerContainer, latestAppLogo);
         this.mapSearch.updateData(this.stations, this.userLocation);
         this.renderMapStations();
         this.listModal.updateData(this.stations, this.userLocation);
@@ -484,6 +549,7 @@ class CargasApp {
     const icons = cfg.userIcons;
     document.getElementById('btn-current-location-badge')?.classList.toggle('hidden', !icons.locationBadge);
     document.getElementById('map-search-container')?.classList.toggle('hidden', !icons.mapSearch);
+    document.getElementById('btn-map-layer-toggle')?.classList.toggle('hidden', !icons.mapLayerToggle);
 
     document.getElementById('btn-recenter-user')?.classList.toggle('hidden', !icons.recenterGps);
     document.getElementById('btn-map-zoom-in')?.classList.toggle('hidden', !icons.zoomControls);
@@ -494,6 +560,45 @@ class CargasApp {
     const anyFloatingVisible =
       icons.recenterGps || icons.zoomControls || icons.fitAllStations || icons.quickList;
     document.querySelector('.floating-map-controls')?.classList.toggle('hidden', !anyFloatingVisible);
+  }
+
+  private syncMapLayerToggleUi(): void {
+    const btn = document.getElementById('btn-map-layer-toggle');
+    const icon = document.getElementById('map-layer-toggle-icon');
+    const label = document.getElementById('map-layer-toggle-label');
+    if (!btn || !icon || !label) return;
+
+    const isSatellite = this.map.getTileStyle() === 'satellite';
+    btn.classList.toggle('satellite-active', isSatellite);
+    icon.textContent = isSatellite ? '🗺️' : '🛰️';
+    label.textContent = isSatellite ? 'خريطة الشوارع' : 'قمر صناعي';
+  }
+
+  private runLaunchSplashSequence(): void {
+    const splash = document.getElementById('app-splash-screen');
+    const stageApp = document.getElementById('splash-stage-app');
+    const stageStation = document.getElementById('splash-stage-station');
+    const statusLabel = document.getElementById('splash-status-label');
+    if (!splash) return;
+
+    // Phase 2 at 1.75s: transition from App Logo to Cargas Stations Logo
+    setTimeout(() => {
+      stageApp?.classList.add('splash-stage-hidden');
+      stageStation?.classList.remove('splash-stage-hidden');
+      if (statusLabel) {
+        statusLabel.textContent = 'جارٍ تحميل محطات كارجاس على الخريطة...';
+      }
+    }, 1750);
+
+    // Reveal the interactive map at 3.5s
+    setTimeout(() => {
+      splash.classList.add('splash-fade-out');
+      this.map?.invalidateSize();
+      setTimeout(() => {
+        splash.remove();
+        this.map?.invalidateSize();
+      }, 420);
+    }, 3500);
   }
 
   private renderMapStations(): void {

@@ -8,7 +8,7 @@ import { escapeHtml } from '../utils/html';
 
 export class HeaderComponent {
   private logoClickCount = 0;
-  private logoClickTimer: any = null;
+  private logoClickTimer: ReturnType<typeof setTimeout> | null = null;
   private enableSecretAdmin: boolean;
   private onTriggerAdminCallback?: () => void;
   private onFindNearestCallback: () => void;
@@ -47,14 +47,21 @@ export class HeaderComponent {
         <div class="header-inner max-w-7xl mx-auto px-3 sm:px-4 py-2 flex items-center justify-between gap-2 flex-wrap">
           
           <!-- Logo & Brand -->
-          <div class="flex items-center gap-2.5 select-none group" id="header-logo-trigger" title="${escapeHtml(cfg.appName)}">
-            <div class="logo-box relative w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center p-1 transition-transform shadow-lg border border-emerald-500/40 bg-slate-900/90 ring-2 ring-emerald-500/20">
-              <div id="header-logo-img-wrapper" class="w-full h-full flex items-center justify-center overflow-hidden rounded-xl">
-                <img src="${appLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="w-full h-full object-contain drop-shadow" />
+          <div
+            class="flex items-center gap-2.5 select-none touch-manipulation group cursor-pointer"
+            id="header-logo-trigger"
+            role="button"
+            tabindex="0"
+            aria-label="${escapeHtml(cfg.appName)}"
+            title="${escapeHtml(cfg.appName)}"
+          >
+            <div class="logo-box pointer-events-none relative w-11 h-11 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center p-1 transition-transform active:scale-95 shadow-lg border border-emerald-500/40 bg-slate-900/90 ring-2 ring-emerald-500/20">
+              <div id="header-logo-img-wrapper" class="pointer-events-none w-full h-full flex items-center justify-center overflow-hidden rounded-xl">
+                <img src="${appLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="pointer-events-none w-full h-full object-contain drop-shadow select-none" />
               </div>
             </div>
 
-            <div class="flex flex-col text-right">
+            <div class="pointer-events-none flex flex-col text-right">
               <div class="flex items-center gap-1.5 flex-wrap">
                 <h1 id="header-app-title" class="text-base sm:text-lg font-black tracking-tight leading-none brand-title">
                   ${escapeHtml(cfg.appName)}
@@ -234,23 +241,79 @@ export class HeaderComponent {
   }
 
   private attachEventListeners(container: HTMLElement): void {
-    // Silent 5-click developer trigger (active ONLY in dev mode; completely disabled in APK / production)
+    // Silent 5-tap admin trigger on app logo/brand (rock-solid for mobile touch, WebView/APK & desktop)
     if (this.enableSecretAdmin && this.onTriggerAdminCallback) {
-      const logoTrigger = container.querySelector('#header-logo-trigger');
-      logoTrigger?.addEventListener('click', () => {
-        this.logoClickCount++;
-        if (this.logoClickTimer) clearTimeout(this.logoClickTimer);
+      const logoTrigger = container.querySelector('#header-logo-trigger') as HTMLElement | null;
+      const logoBox = logoTrigger?.querySelector('.logo-box') as HTMLElement | null;
+      if (logoTrigger) {
+        let pointerDownPos: { x: number; y: number } | null = null;
+        let lastPointerTapAt = 0;
 
-        if (this.logoClickCount >= 5) {
-          this.logoClickCount = 0;
-          SoundService.playChime('start');
-          this.onTriggerAdminCallback?.();
-        } else {
-          this.logoClickTimer = setTimeout(() => {
+        const registerLogoTap = () => {
+          this.logoClickCount++;
+          if (this.logoClickTimer) {
+            clearTimeout(this.logoClickTimer);
+            this.logoClickTimer = null;
+          }
+
+          if (logoBox) {
+            logoBox.style.transform = 'scale(0.92)';
+            setTimeout(() => {
+              logoBox.style.transform = '';
+            }, 90);
+          }
+
+          if (this.logoClickCount >= 5) {
             this.logoClickCount = 0;
-          }, 2500);
-        }
-      });
+            this.onTriggerAdminCallback?.();
+            try {
+              SoundService.playChime('start');
+            } catch {
+              // ignore WebAudio restrictions in mobile WebViews
+            }
+          } else {
+            this.logoClickTimer = setTimeout(() => {
+              this.logoClickCount = 0;
+              this.logoClickTimer = null;
+            }, 5000);
+          }
+        };
+
+        logoTrigger.addEventListener('pointerdown', (e) => {
+          if (e.pointerType === 'mouse' && e.button !== 0) return;
+          pointerDownPos = { x: e.clientX, y: e.clientY };
+        });
+
+        logoTrigger.addEventListener('pointerup', (e) => {
+          if (e.pointerType === 'mouse' && e.button !== 0) return;
+          if (pointerDownPos) {
+            const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+            pointerDownPos = null;
+            if (dist > 44) return;
+          }
+          lastPointerTapAt = performance.now();
+          registerLogoTap();
+        });
+
+        logoTrigger.addEventListener('pointercancel', () => {
+          pointerDownPos = null;
+        });
+
+        logoTrigger.addEventListener('click', (e) => {
+          // Deduplicate trailing click after pointerup, while still supporting accessibility/keyboard clicks (detail === 0)
+          if (e.detail !== 0 && performance.now() - lastPointerTapAt < 450) {
+            return;
+          }
+          registerLogoTap();
+        });
+
+        logoTrigger.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            registerLogoTap();
+          }
+        });
+      }
     }
 
     container.querySelector('#btn-nearest-station')?.addEventListener('click', () => {
@@ -313,7 +376,7 @@ export class HeaderComponent {
     if (!wrapper) return;
 
     if (logoUrl) {
-      wrapper.innerHTML = `<img src="${logoUrl}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Logo" class="max-w-full max-h-full object-contain" />`;
+      wrapper.innerHTML = `<img src="${logoUrl}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Logo" class="pointer-events-none max-w-full max-h-full object-contain select-none" />`;
     } else {
       wrapper.innerHTML = `
         <svg class="w-7 h-7 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">

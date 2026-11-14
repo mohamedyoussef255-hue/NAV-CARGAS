@@ -4,14 +4,31 @@ import { Station, UserLocation, RouteData, ThemeMode } from '../types';
 import { DEFAULT_CARGAS_LOGO_DATA_URL } from '../assets/cargasLogo';
 import { StationStorage } from '../services/stationStorage';
 import { LocationService } from '../services/locationService';
-import { OfflineMapService, tile2lat, tile2lng } from '../services/offlineMapService';
+import {
+  CacheTileKind,
+  MapLayerStyle,
+  OfflineMapService,
+  tile2lat,
+  tile2lng,
+} from '../services/offlineMapService';
 import { escapeHtml } from '../utils/html';
 
 const EMPTY_TRANSPARENT_TILE =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+const STORAGE_KEY_MAP_LAYER_STYLE = 'cargas_map_layer_style_v1';
 
 class OfflineFirstTileLayer extends L.TileLayer {
   private objectUrls = new WeakMap<HTMLElement, string>();
+  private tileKind: CacheTileKind;
+
+  constructor(
+    urlTemplate: string,
+    options?: L.TileLayerOptions,
+    tileKind: CacheTileKind = 'streets'
+  ) {
+    super(urlTemplate, options);
+    this.tileKind = tileKind;
+  }
 
   override onAdd(map: L.Map): this {
     this.on('tileunload', (e: L.TileEvent) => {
@@ -33,7 +50,8 @@ class OfflineFirstTileLayer extends L.TileLayer {
     const z = coords.z;
     const x = coords.x;
     const y = coords.y;
-    const url = OfflineMapService.getTileUrl(z, x, y);
+    const kind = this.tileKind;
+    const url = OfflineMapService.getTileUrl(z, x, y, kind);
 
     const finishTransparent = () => {
       tile.style.opacity = '0';
@@ -59,7 +77,7 @@ class OfflineFirstTileLayer extends L.TileLayer {
     void (async () => {
       try {
         // 1. Always check local storage (IndexedDB + Cache API) first
-        const cachedBlob = await OfflineMapService.getCachedTileBlob(z, x, y, url);
+        const cachedBlob = await OfflineMapService.getCachedTileBlob(z, x, y, url, kind);
         if (cachedBlob) {
           assignBlob(cachedBlob);
           return;
@@ -77,13 +95,13 @@ class OfflineFirstTileLayer extends L.TileLayer {
           if (resp.ok) {
             const blob = await resp.blob();
             if (blob.size > 0) {
-              void OfflineMapService.saveTileBlob(z, x, y, url, blob);
+              void OfflineMapService.saveTileBlob(z, x, y, url, blob, kind);
               assignBlob(blob);
               return;
             }
           }
         } catch {
-          // Fall through to direct <img> or Carto Voyager mirror while online
+          // Fall through to direct <img> or mirror while online
         }
 
         if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -97,7 +115,11 @@ class OfflineFirstTileLayer extends L.TileLayer {
           done(undefined, tile);
         };
         tile.onerror = () => {
-          if (tile.dataset.mirrorTried !== '1' && (typeof navigator === 'undefined' || navigator.onLine)) {
+          if (
+            kind === 'streets' &&
+            tile.dataset.mirrorTried !== '1' &&
+            (typeof navigator === 'undefined' || navigator.onLine)
+          ) {
             tile.dataset.mirrorTried = '1';
             const sub = ['a', 'b', 'c', 'd'][Math.abs(x + y) % 4];
             tile.src = `https://${sub}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`;
@@ -116,9 +138,9 @@ class OfflineFirstTileLayer extends L.TileLayer {
 }
 
 class OfflineCoordinateGridLayer extends L.GridLayer {
-  private mapStyle: 'streets' | 'dark' = 'streets';
+  private mapStyle: MapLayerStyle = 'streets';
 
-  setMapStyle(style: 'streets' | 'dark'): void {
+  setMapStyle(style: MapLayerStyle): void {
     this.mapStyle = style;
     this.redraw();
   }
@@ -132,12 +154,12 @@ class OfflineCoordinateGridLayer extends L.GridLayer {
     const ctx = tile.getContext('2d');
     if (!ctx) return tile;
 
-    const isDark = this.mapStyle === 'dark';
-    ctx.fillStyle = isDark ? '#111827' : '#e5e7eb';
+    const isSatellite = this.mapStyle === 'satellite';
+    ctx.fillStyle = isSatellite ? '#1e293b' : '#e5e7eb';
     ctx.fillRect(0, 0, size.x, size.y);
 
     // Subtle sub-grid lines every 64px
-    ctx.strokeStyle = isDark ? 'rgba(16, 185, 129, 0.08)' : 'rgba(15, 23, 42, 0.06)';
+    ctx.strokeStyle = isSatellite ? 'rgba(56, 189, 248, 0.1)' : 'rgba(15, 23, 42, 0.06)';
     ctx.lineWidth = 1;
     for (let pos = 0; pos <= size.x; pos += 64) {
       ctx.beginPath();
@@ -152,20 +174,20 @@ class OfflineCoordinateGridLayer extends L.GridLayer {
     }
 
     // Tile boundary graticule line
-    ctx.strokeStyle = isDark ? 'rgba(16, 185, 129, 0.18)' : 'rgba(5, 150, 105, 0.14)';
+    ctx.strokeStyle = isSatellite ? 'rgba(56, 189, 248, 0.18)' : 'rgba(5, 150, 105, 0.14)';
     ctx.strokeRect(0.5, 0.5, size.x - 1, size.y - 1);
 
-    // Coordinate label for the tile corner (only visible when street tiles are unavailable/offline)
+    // Coordinate label for the tile corner (only visible when map tiles are unavailable/offline)
     const lat = tile2lat(coords.y, coords.z).toFixed(3);
     const lng = tile2lng(coords.x, coords.z).toFixed(3);
 
-    ctx.fillStyle = isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(71, 85, 105, 0.5)';
+    ctx.fillStyle = isSatellite ? 'rgba(203, 213, 225, 0.55)' : 'rgba(71, 85, 105, 0.5)';
     ctx.font = '600 10px monospace';
     ctx.fillText(`${lat}°, ${lng}°`, 8, 16);
 
-    ctx.fillStyle = isDark ? 'rgba(52, 211, 153, 0.3)' : 'rgba(5, 150, 105, 0.35)';
+    ctx.fillStyle = isSatellite ? 'rgba(56, 189, 248, 0.4)' : 'rgba(5, 150, 105, 0.35)';
     ctx.font = '700 10px Cairo, sans-serif';
-    ctx.fillText(`Z${coords.z} • خريطة إحداثيات`, 8, size.y - 10);
+    ctx.fillText(`Z${coords.z} • ${isSatellite ? 'قمر صناعي (أوفلاين)' : 'خريطة إحداثيات'}`, 8, size.y - 10);
 
     return tile;
   }
@@ -175,6 +197,8 @@ export class MapView {
   private map: L.Map | null = null;
   private offlineGridLayer: OfflineCoordinateGridLayer | null = null;
   private tileLayer: L.TileLayer | null = null;
+  private satelliteLabelsLayer: L.TileLayer | null = null;
+  private attributionControl: L.Control.Attribution | null = null;
   private userMarker: L.Marker | null = null;
   private userAccuracyCircle: L.Circle | null = null;
   private stationMarkers: Map<string, L.Marker> = new Map();
@@ -185,7 +209,7 @@ export class MapView {
   private pickLocationHandler: ((e: L.LeafletMouseEvent) => void) | null = null;
   private containerId: string;
   private currentTheme: ThemeMode = 'dark';
-  private currentTileStyle: 'streets' | 'dark' = 'streets'; // Default to detailed streets!
+  private currentTileStyle: MapLayerStyle = 'streets';
   private stationLogo: string | null = null;
   private stationsCache: Station[] = [];
   private lastSelectedStationId?: string;
@@ -195,11 +219,20 @@ export class MapView {
   private resizeHandler = () => this.invalidateSize();
   private onlineHandler = () => {
     this.tileLayer?.redraw();
+    this.satelliteLabelsLayer?.redraw();
   };
 
   constructor(containerId: string) {
     this.containerId = containerId;
     this.stationLogo = StationStorage.getStationLogo();
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_MAP_LAYER_STYLE);
+      if (saved === 'satellite' || saved === 'streets') {
+        this.currentTileStyle = saved;
+      }
+    } catch {
+      this.currentTileStyle = 'streets';
+    }
   }
 
   init(centerLat = 30.0444, centerLng = 31.2357, zoom = 12): void {
@@ -216,14 +249,14 @@ export class MapView {
     });
 
     // Custom attribution
-    L.control
+    this.attributionControl = L.control
       .attribution({
         position: 'bottomleft',
-        prefix: '<span>© خرائط الشوارع المفتوحة OSM & OSRM</span>',
+        prefix: this.getAttributionPrefix(),
       })
       .addTo(this.map);
 
-    // Add permanent offline coordinate canvas grid layer beneath street tiles
+    // Add permanent offline coordinate canvas grid layer beneath street/satellite tiles
     this.offlineGridLayer = new OfflineCoordinateGridLayer({
       zIndex: 1,
       maxZoom: 19,
@@ -231,7 +264,7 @@ export class MapView {
     this.offlineGridLayer.setMapStyle(this.currentTileStyle);
     this.offlineGridLayer.addTo(this.map);
 
-    // Apply the offline-first street tiles immediately
+    // Apply saved or default layer ('streets' or 'satellite') immediately
     this.updateTileLayer();
 
     // Ensure Leaflet recalculates viewport cleanly after zoom/layout transitions
@@ -254,6 +287,12 @@ export class MapView {
     window.addEventListener('online', this.onlineHandler);
   }
 
+  private getAttributionPrefix(): string {
+    return this.currentTileStyle === 'satellite'
+      ? '<span>© صور الأقمار الصناعية Esri World Imagery</span>'
+      : '<span>© خرائط الشوارع المفتوحة OSM & OSRM</span>';
+  }
+
   invalidateSize(): void {
     if (this.map) {
       this.map.invalidateSize({ animate: false });
@@ -262,19 +301,35 @@ export class MapView {
 
   setTheme(theme: ThemeMode): void {
     this.currentTheme = theme;
-    // Street map night mode is permanently disabled: keep street tiles in daylight mode
-    this.currentTileStyle = 'streets';
-    this.offlineGridLayer?.setMapStyle('streets');
+    // Street map night mode remains permanently disabled: keep either 'streets' (daylight) or 'satellite'
+    this.offlineGridLayer?.setMapStyle(this.currentTileStyle);
   }
 
-  toggleTileStyle(): 'streets' | 'dark' {
-    this.currentTileStyle = 'streets';
+  getMapLayerStyle(): MapLayerStyle {
+    return this.currentTileStyle;
+  }
+
+  setMapLayerStyle(style: MapLayerStyle): MapLayerStyle {
+    if (this.currentTileStyle === style && this.tileLayer) {
+      return this.currentTileStyle;
+    }
+    this.currentTileStyle = style;
+    try {
+      localStorage.setItem(STORAGE_KEY_MAP_LAYER_STYLE, style);
+    } catch {
+      // ignore
+    }
     this.updateTileLayer();
     return this.currentTileStyle;
   }
 
-  getTileStyle(): 'streets' | 'dark' {
-    return 'streets';
+  toggleTileStyle(): MapLayerStyle {
+    const next: MapLayerStyle = this.currentTileStyle === 'streets' ? 'satellite' : 'streets';
+    return this.setMapLayerStyle(next);
+  }
+
+  getTileStyle(): MapLayerStyle {
+    return this.currentTileStyle;
   }
 
   setStationLogo(logo: string | null): void {
@@ -319,22 +374,61 @@ export class MapView {
   private updateTileLayer(): void {
     if (!this.map) return;
 
-    this.currentTileStyle = 'streets';
-    this.offlineGridLayer?.setMapStyle('streets');
+    this.offlineGridLayer?.setMapStyle(this.currentTileStyle);
+    this.attributionControl?.setPrefix(this.getAttributionPrefix());
 
     if (this.tileLayer) {
       this.map.removeLayer(this.tileLayer);
+      this.tileLayer = null;
+    }
+    if (this.satelliteLabelsLayer) {
+      this.map.removeLayer(this.satelliteLabelsLayer);
+      this.satelliteLabelsLayer = null;
     }
 
-    this.tileLayer = new OfflineFirstTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      zIndex: 2,
-      keepBuffer: 4,
-      updateWhenIdle: false,
-      attribution: '© OpenStreetMap contributors',
-    });
+    if (this.currentTileStyle === 'satellite') {
+      this.tileLayer = new OfflineFirstTileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 19,
+          maxNativeZoom: 18,
+          zIndex: 2,
+          keepBuffer: 4,
+          updateWhenIdle: false,
+          attribution: '© Esri World Imagery',
+        },
+        'satellite'
+      );
+      this.tileLayer.addTo(this.map);
 
-    this.tileLayer.addTo(this.map);
+      // Reference city/place labels overlay above satellite imagery (strictly offline-safe)
+      this.satelliteLabelsLayer = new OfflineFirstTileLayer(
+        'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
+        {
+          maxZoom: 19,
+          maxNativeZoom: 18,
+          zIndex: 3,
+          keepBuffer: 2,
+          updateWhenIdle: false,
+          opacity: 0.9,
+        },
+        'satellite_labels'
+      );
+      this.satelliteLabelsLayer.addTo(this.map);
+    } else {
+      this.tileLayer = new OfflineFirstTileLayer(
+        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        {
+          maxZoom: 19,
+          zIndex: 2,
+          keepBuffer: 4,
+          updateWhenIdle: false,
+          attribution: '© OpenStreetMap contributors',
+        },
+        'streets'
+      );
+      this.tileLayer.addTo(this.map);
+    }
   }
 
   private buildUserPopupHtml(loc: UserLocation): string {

@@ -71,8 +71,8 @@ export const PREDEFINED_LOCATIONS: PredefinedLocation[] = [
 ];
 
 const STORAGE_KEY_MANUAL_LOC = 'cargas_user_manual_loc_v2';
-// Browser IP/cell-tower geolocation frequently reports ISP/hub centers (e.g. Benha/Menoufia) with accuracy > 600m.
-const MAX_ACCEPTABLE_ACCURACY_METERS = 600;
+// Browser IP/cell-tower geolocation frequently reports ISP/hub centers with accuracy > 1.2km.
+const MAX_ACCEPTABLE_ACCURACY_METERS = 1200;
 const HIGH_ACCURACY_OPTIONS: PositionOptions = {
   enableHighAccuracy: true,
   timeout: 15000,
@@ -441,15 +441,19 @@ export class LocationService {
       navigator.geolocation.clearWatch(this.watchId);
       this.watchId = null;
     }
-    this.watchId = navigator.geolocation.watchPosition(
-      (pos) => this.processBrowserPosition(pos, true),
-      (err) => this.handleGeolocationError(err, true),
-      {
-        enableHighAccuracy: true,
-        timeout: 20000,
-        maximumAge: 2000,
-      }
-    );
+    try {
+      this.watchId = navigator.geolocation.watchPosition(
+        (pos) => this.processBrowserPosition(pos, true),
+        (err) => this.handleGeolocationError(err, true),
+        {
+          enableHighAccuracy: true,
+          timeout: 20000,
+          maximumAge: 2000,
+        }
+      );
+    } catch (e) {
+      console.warn('Geolocation watchPosition threw synchronously:', e);
+    }
   }
 
   // Start live GPS tracking
@@ -469,23 +473,26 @@ export class LocationService {
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
       this.gpsStatus = this.hasManualOverride ? 'manual' : 'unavailable';
       this.lastErrorCode = 'unsupported';
-      this.gpsWarningMessage = 'المتصفح لا يدعم GPS التلقائي — يمكنك اختيار منطقتك أو النقر على الخريطة.';
+      this.gpsWarningMessage = 'الجهاز لا يدعم GPS التلقائي — يمكنك اختيار منطقتك أو النقر على الخريطة.';
       this.notifyStatusListeners();
       return;
     }
 
-    if (!this.isSecureEnvironment()) {
-      this.gpsStatus = this.hasManualOverride ? 'manual' : 'denied';
-      this.lastErrorCode = 'insecure_context';
-      this.gpsWarningMessage = 'يتطلب تحديد الموقع عبر GPS اتصالاً آمناً (HTTPS). يمكنك تحديد موقعك يدوياً من الخريطة.';
-      this.notifyStatusListeners();
-      return;
-    }
-
+    // Attempt hardware GPS directly even inside APK WebView file:// / local origins
     this.isTracking = true;
     this.attachPermissionObserver();
-    this.requestCurrentFix(true);
-    this.startWatchLoop();
+    try {
+      this.requestCurrentFix(true);
+      this.startWatchLoop();
+    } catch (e) {
+      console.warn('Geolocation tracking error:', e);
+      if (!this.isSecureEnvironment() && !this.hasManualOverride) {
+        this.gpsStatus = 'denied';
+        this.lastErrorCode = 'insecure_context';
+        this.gpsWarningMessage = 'يتطلب تحديد الموقع عبر GPS اتصالاً آمناً أو صلاحية الموقع بالتطبيق.';
+        this.notifyStatusListeners();
+      }
+    }
   }
 
   static stopTracking(): void {
@@ -589,22 +596,7 @@ export class LocationService {
       if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
         this.gpsStatus = 'unavailable';
         this.lastErrorCode = 'unsupported';
-        this.gpsWarningMessage = 'المتصفح لا يدعم خدمة GPS.';
-        this.notifyStatusListeners();
-        resolve({
-          success: false,
-          status: this.gpsStatus,
-          errorCode: this.lastErrorCode,
-          loc: this.getLocation(),
-          message: this.gpsWarningMessage,
-        });
-        return;
-      }
-
-      if (!this.isSecureEnvironment()) {
-        this.gpsStatus = 'denied';
-        this.lastErrorCode = 'insecure_context';
-        this.gpsWarningMessage = 'يتطلب تحديد الموقع عبر GPS اتصالاً آمناً (HTTPS).';
+        this.gpsWarningMessage = 'الجهاز لا يدعم خدمة GPS.';
         this.notifyStatusListeners();
         resolve({
           success: false,

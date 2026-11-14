@@ -18,6 +18,7 @@ const STORAGE_KEY_STATIONS = 'cargas_stations_list_v1';
 const STORAGE_KEY_STATIONS_CLEARED = 'cargas_stations_cleared_v1';
 const STORAGE_KEY_STATIONS_UPDATED_AT = 'cargas_stations_updated_at_v1';
 const STORAGE_KEY_BUNDLED_SIG = 'cargas_bundled_sig_v1';
+const STORAGE_KEY_USER_MODIFIED = 'cargas_stations_user_modified_v1';
 const STORAGE_KEY_APP_LOGO = 'cargas_app_logo_v2';
 const STORAGE_KEY_STATION_LOGO = 'cargas_station_logo_v2';
 const STORAGE_KEY_THEME = 'cargas_theme_mode_v1';
@@ -26,6 +27,7 @@ const META_KEY_SEEDED = 'stations_seeded_v1';
 const META_KEY_CLEARED = 'stations_cleared_v1';
 const META_KEY_UPDATED_AT = 'stations_updated_at_v1';
 const META_KEY_BUNDLED_SIG = 'bundled_sig_v1';
+const META_KEY_USER_MODIFIED = 'stations_user_modified_v1';
 const META_KEY_APP_LOGO = 'app_logo_v2';
 const META_KEY_STATION_LOGO = 'station_logo_v2';
 
@@ -166,22 +168,25 @@ export class StationStorage {
 
     try {
       await this.idbWriteQueue;
-      const [idbStationsRaw, idbSeeded, idbCleared, idbUpdatedAt, idbBundledSig] = await Promise.all([
+      const [idbStationsRaw, idbSeeded, idbCleared, idbUpdatedAt, idbBundledSig, idbUserModified] = await Promise.all([
         StationDb.getAllStations(),
         StationDb.getMeta<boolean>(META_KEY_SEEDED),
         StationDb.getMeta<boolean>(META_KEY_CLEARED),
         StationDb.getMeta<number>(META_KEY_UPDATED_AT),
         StationDb.getMeta<string>(META_KEY_BUNDLED_SIG),
+        StationDb.getMeta<boolean>(META_KEY_USER_MODIFIED),
       ]);
 
       let lsCleared = false;
       let lsStations: Station[] | null = null;
       let lsUpdatedAt = 0;
       let lsBundledSig: string | null = null;
+      let lsUserModified = false;
       try {
         lsCleared = localStorage.getItem(STORAGE_KEY_STATIONS_CLEARED) === 'true';
         lsUpdatedAt = Number(localStorage.getItem(STORAGE_KEY_STATIONS_UPDATED_AT) || '0');
         lsBundledSig = localStorage.getItem(STORAGE_KEY_BUNDLED_SIG);
+        lsUserModified = localStorage.getItem(STORAGE_KEY_USER_MODIFIED) === 'true';
         const stored = localStorage.getItem(STORAGE_KEY_STATIONS);
         if (stored !== null) {
           const parsed = JSON.parse(stored);
@@ -193,33 +198,51 @@ export class StationStorage {
         // ignore
       }
 
-      // Always ensure bundled/active app & station logos are seeded into IndexedDB for offline/WebView persistence
+      const hasUserModifications = Boolean(idbUserModified || lsUserModified);
+
+      // Always ensure bundled/active app & station logos are seeded and preserved in IndexedDB + LocalStorage
       const [idbAppLogo, idbStationLogo] = await Promise.all([
         StationDb.getMeta<string>(META_KEY_APP_LOGO),
         StationDb.getMeta<string>(META_KEY_STATION_LOGO),
       ]);
+      let lsAppLogo: string | null = null;
+      let lsStationLogo: string | null = null;
+      try {
+        lsAppLogo = localStorage.getItem(STORAGE_KEY_APP_LOGO);
+        lsStationLogo = localStorage.getItem(STORAGE_KEY_STATION_LOGO);
+      } catch {
+        // ignore
+      }
+
       const resolvedAppLogo =
-        (isDev ? this.getAppLogo() : BAKED_APP_LOGO || idbAppLogo) || DEFAULT_CARGAS_LOGO_DATA_URL;
+        lsAppLogo || idbAppLogo || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
       const resolvedStationLogo =
-        (isDev ? this.getStationLogo() : BAKED_STATION_LOGO || idbStationLogo) || DEFAULT_CARGAS_LOGO_DATA_URL;
+        lsStationLogo || idbStationLogo || BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
       this.memoryAppLogo = resolvedAppLogo;
       this.memoryStationLogo = resolvedStationLogo;
 
-      if (!idbAppLogo || (!isDev && idbAppLogo !== resolvedAppLogo)) {
+      if (!idbAppLogo || idbAppLogo !== resolvedAppLogo) {
         this.enqueueIdbWrite(async () => {
           await StationDb.setMeta(META_KEY_APP_LOGO, resolvedAppLogo);
         });
       }
-      if (!idbStationLogo || (!isDev && idbStationLogo !== resolvedStationLogo)) {
+      if (!idbStationLogo || idbStationLogo !== resolvedStationLogo) {
         this.enqueueIdbWrite(async () => {
           await StationDb.setMeta(META_KEY_STATION_LOGO, resolvedStationLogo);
         });
       }
 
       // In production / APK builds, if the baked DEFAULT_STATIONS in source code changed
-      // since the previous app install, refresh cached stations cleanly from source code!
+      // since the previous app install AND the user has not saved custom edits on this device,
+      // refresh cached stations cleanly from source code!
       const storedBundledSig = idbBundledSig || lsBundledSig;
-      if (!isDev && storedBundledSig !== bundledSignature && DEFAULT_STATIONS.length > 0) {
+      if (
+        !isDev &&
+        !hasUserModifications &&
+        storedBundledSig &&
+        storedBundledSig !== bundledSignature &&
+        DEFAULT_STATIONS.length > 0
+      ) {
         const freshlyBaked = this.sanitizeAndFixStations([...DEFAULT_STATIONS]);
         this.memoryStations = freshlyBaked;
         const now = Date.now();
@@ -228,6 +251,7 @@ export class StationStorage {
           localStorage.setItem(STORAGE_KEY_STATIONS_CLEARED, 'false');
           localStorage.setItem(STORAGE_KEY_STATIONS_UPDATED_AT, String(now));
           localStorage.setItem(STORAGE_KEY_BUNDLED_SIG, bundledSignature);
+          localStorage.setItem(STORAGE_KEY_USER_MODIFIED, 'false');
         } catch {
           // ignore
         }
@@ -237,6 +261,7 @@ export class StationStorage {
           await StationDb.setMeta(META_KEY_CLEARED, false);
           await StationDb.setMeta(META_KEY_UPDATED_AT, now);
           await StationDb.setMeta(META_KEY_BUNDLED_SIG, bundledSignature);
+          await StationDb.setMeta(META_KEY_USER_MODIFIED, false);
           await StationDb.setMeta(META_KEY_APP_LOGO, resolvedAppLogo);
           await StationDb.setMeta(META_KEY_STATION_LOGO, resolvedStationLogo);
         });
@@ -407,18 +432,20 @@ export class StationStorage {
   }
 
   // Persists stations to IndexedDB + localStorage and writes to source code src/data/defaultStations.ts when online/dev
-  static saveStations(stations: Station[], options?: { cleared?: boolean }): void {
+  static saveStations(stations: Station[], options?: { cleared?: boolean; userModified?: boolean }): void {
     const normalized = this.sanitizeAndFixStations(stations);
     this.memoryStations = normalized;
     const isCleared = Boolean(options?.cleared);
     const updatedAt = Date.now();
-    const bundledSignature = computeStationsSignature(normalized);
+    const bundledSignature = computeStationsSignature(DEFAULT_STATIONS);
+    const isUserModified = options?.userModified ?? true;
 
     try {
       localStorage.setItem(STORAGE_KEY_STATIONS, JSON.stringify(normalized));
       localStorage.setItem(STORAGE_KEY_STATIONS_CLEARED, isCleared ? 'true' : 'false');
       localStorage.setItem(STORAGE_KEY_STATIONS_UPDATED_AT, String(updatedAt));
       localStorage.setItem(STORAGE_KEY_BUNDLED_SIG, bundledSignature);
+      localStorage.setItem(STORAGE_KEY_USER_MODIFIED, isUserModified ? 'true' : 'false');
     } catch (e) {
       console.error('Failed to save stations to localStorage', e);
     }
@@ -429,6 +456,7 @@ export class StationStorage {
       await StationDb.setMeta(META_KEY_CLEARED, isCleared);
       await StationDb.setMeta(META_KEY_UPDATED_AT, updatedAt);
       await StationDb.setMeta(META_KEY_BUNDLED_SIG, bundledSignature);
+      await StationDb.setMeta(META_KEY_USER_MODIFIED, isUserModified);
     });
 
     dispatchSafe(STATIONS_UPDATED_EVENT, normalized);
@@ -452,6 +480,14 @@ export class StationStorage {
           throw new Error(`Server returned HTTP ${response.status}`);
         }
         const data = await response.json();
+        try {
+          localStorage.setItem(STORAGE_KEY_USER_MODIFIED, 'false');
+        } catch {
+          // ignore
+        }
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_USER_MODIFIED, false);
+        });
         return {
           success: true,
           count: list.length,
@@ -533,7 +569,7 @@ export class StationStorage {
 
   // Restore bundled demo stations
   static restoreDefaultData(): void {
-    this.saveStations([...DEFAULT_STATIONS], { cleared: false });
+    this.saveStations([...DEFAULT_STATIONS], { cleared: false, userModified: false });
   }
 
   // Listen to station data changes
@@ -550,15 +586,14 @@ export class StationStorage {
   // 1. App Logo Handling (Header & UI)
   // ==========================================
   static getAppLogo(): string {
-    if (isDevEnvironment()) {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_APP_LOGO);
-        if (stored) return stored;
-      } catch {
-        // ignore
-      }
+    if (this.memoryAppLogo) return this.memoryAppLogo;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_APP_LOGO);
+      if (stored) return stored;
+    } catch {
+      // ignore
     }
-    return this.memoryAppLogo || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+    return BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
   }
 
   static saveAppLogo(logoDataUrl: string | null, options?: { skipSourceSync?: boolean }): void {
@@ -601,15 +636,14 @@ export class StationStorage {
   // 2. Station Map Pin Logo Handling (Pins & Station Cards)
   // ==========================================
   static getStationLogo(): string {
-    if (isDevEnvironment()) {
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_STATION_LOGO);
-        if (stored) return stored;
-      } catch {
-        // ignore
-      }
+    if (this.memoryStationLogo) return this.memoryStationLogo;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_STATION_LOGO);
+      if (stored) return stored;
+    } catch {
+      // ignore
     }
-    return this.memoryStationLogo || BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+    return BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
   }
 
   static saveStationLogo(logoDataUrl: string | null, options?: { skipSourceSync?: boolean }): void {

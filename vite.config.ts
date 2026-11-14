@@ -130,6 +130,20 @@ export default defineConfig({
             },
           },
           {
+            urlPattern: /^https:\/\/(server|services)\.arcgisonline\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'cargas-satellite-tiles-v1',
+              expiration: {
+                maxEntries: 20000,
+                maxAgeSeconds: 60 * 60 * 24 * 120,
+              },
+              cacheableResponse: {
+                statuses: [0, 200],
+              },
+            },
+          },
+          {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
             handler: 'CacheFirst',
             options: {
@@ -397,6 +411,7 @@ export default defineConfig({
                       zoomControls: icons.zoomControls ?? true,
                       fitAllStations: icons.fitAllStations ?? true,
                       quickList: icons.quickList ?? true,
+                      mapLayerToggle: icons.mapLayerToggle ?? true,
                     },
                   };
 
@@ -414,6 +429,7 @@ export default defineConfig({
   zoomControls: boolean;
   fitAllStations: boolean;
   quickList: boolean;
+  mapLayerToggle: boolean;
 }
 
 export interface AppConfig {
@@ -439,6 +455,7 @@ export const DEFAULT_USER_ICONS: UserIconsVisibility = {
   zoomControls: true,
   fitAllStations: true,
   quickList: true,
+  mapLayerToggle: true,
 };
 
 export const DEFAULT_APP_CONFIG: AppConfig = {

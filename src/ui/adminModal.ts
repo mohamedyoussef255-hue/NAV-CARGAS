@@ -48,6 +48,13 @@ const createEmptyAddDraft = (): AddStationDraft => ({
   hasFast: true,
 });
 
+function normalizePasswordDigits(raw: string): string {
+  return raw
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .trim();
+}
+
 export class AdminModalComponent {
   private container: HTMLElement;
   private isAuthenticated = false;
@@ -108,8 +115,9 @@ export class AdminModalComponent {
 
   // Password verification modal for secret 0000 password
   private renderPasswordPrompt(): void {
+    this.container.classList.remove('hidden');
     this.container.innerHTML = `
-      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1100] flex items-center justify-center p-4">
+      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1500] flex items-center justify-center p-4">
         <div class="glass-card w-full max-w-sm rounded-3xl p-6 shadow-2xl border text-center animate-scale-up" id="auth-box">
           
           <div class="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-400 mx-auto flex items-center justify-center text-2xl mb-4 border border-amber-500/30">
@@ -125,14 +133,29 @@ export class AdminModalComponent {
 
           <form id="admin-auth-form" class="space-y-4">
             <div>
-              <input 
-                type="password" 
-                id="admin-password-input" 
-                placeholder="أدخل كلمة المرور" 
-                maxlength="32"
-                autocomplete="off"
-                class="w-full text-center tracking-widest text-xl font-bold bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-2xl py-3 text-white outline-none font-sans"
-              />
+              <div class="relative flex items-center">
+                <input 
+                  type="password" 
+                  id="admin-password-input" 
+                  dir="ltr"
+                  inputmode="text"
+                  autocapitalize="off"
+                  autocorrect="off"
+                  spellcheck="false"
+                  placeholder="أدخل كلمة المرور" 
+                  maxlength="32"
+                  autocomplete="off"
+                  class="w-full text-center tracking-widest text-xl font-bold bg-slate-900 border border-slate-700 focus:border-emerald-500 rounded-2xl py-3 px-10 text-white outline-none font-sans"
+                />
+                <button
+                  type="button"
+                  id="btn-toggle-auth-pwd"
+                  class="absolute left-2.5 p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors text-sm"
+                  title="إظهار / إخفاء كلمة المرور"
+                >
+                  👁️
+                </button>
+              </div>
               <div id="auth-error-msg" class="hidden text-xs text-rose-400 font-bold mt-2">
                 كلمة المرور غير صحيحة، حاول ثانية
               </div>
@@ -159,27 +182,48 @@ export class AdminModalComponent {
       </div>
     `;
 
-    const input = this.container.querySelector('#admin-password-input') as HTMLInputElement;
+    const input = this.container.querySelector('#admin-password-input') as HTMLInputElement | null;
     input?.focus();
+    setTimeout(() => input?.focus(), 60);
+
+    this.container.querySelector('#btn-toggle-auth-pwd')?.addEventListener('click', () => {
+      if (!input) return;
+      const showing = input.type === 'text';
+      input.type = showing ? 'password' : 'text';
+      const btn = this.container.querySelector('#btn-toggle-auth-pwd');
+      if (btn) btn.textContent = showing ? '👁️' : '🙈';
+    });
 
     const form = this.container.querySelector('#admin-auth-form');
     form?.addEventListener('submit', (e) => {
       e.preventDefault();
-      const val = input.value.trim();
-      const currentPassword = AppConfigService.getConfig().adminPassword;
-      if (val === currentPassword) {
+      const val = normalizePasswordDigits(input?.value || '');
+      const configured = normalizePasswordDigits(
+        AppConfigService.getConfig().adminPassword || DEFAULT_APP_CONFIG.adminPassword
+      );
+      if (val && val === configured) {
         this.isAuthenticated = true;
-        SoundService.playChime('start');
+        try {
+          SoundService.playChime('start');
+        } catch {
+          // ignore
+        }
         this.renderDashboard();
       } else {
-        SoundService.playChime('turn');
+        try {
+          SoundService.playChime('turn');
+        } catch {
+          // ignore
+        }
         const err = this.container.querySelector('#auth-error-msg');
         const box = this.container.querySelector('#auth-box');
         err?.classList.remove('hidden');
         box?.classList.add('animate-shake');
         setTimeout(() => box?.classList.remove('animate-shake'), 600);
-        input.value = '';
-        input.focus();
+        if (input) {
+          input.value = '';
+          input.focus();
+        }
       }
     });
 
@@ -196,7 +240,7 @@ export class AdminModalComponent {
     this.stations = StationStorage.getStations();
 
     this.container.innerHTML = `
-      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1100] flex items-center justify-center p-2 sm:p-4">
+      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[1500] flex items-center justify-center p-2 sm:p-4">
         <div class="glass-card w-full max-w-4xl h-[92vh] rounded-3xl flex flex-col shadow-2xl border overflow-hidden animate-scale-up">
           
           <!-- Top Header -->
@@ -808,7 +852,7 @@ export class AdminModalComponent {
     };
 
     return `
-      <div class="fixed inset-0 bg-black/80 backdrop-blur-md z-[1150] flex items-center justify-center p-3">
+      <div class="fixed inset-0 bg-black/80 backdrop-blur-md z-[1550] flex items-center justify-center p-3">
         <div class="glass-card w-full max-w-lg max-h-[90vh] rounded-3xl p-5 shadow-2xl border overflow-y-auto custom-scrollbar animate-scale-up text-right">
           
           <div class="flex items-center justify-between pb-3 mb-3 border-b border-white/10">
@@ -1202,6 +1246,7 @@ export class AdminModalComponent {
       { key: 'zoomControls', icon: '➕', label: 'أزرار التكبير والتصغير (+ / -)', desc: 'التحكم بمستوى تقريب الخريطة' },
       { key: 'fitAllStations', icon: '🌍', label: 'زر عرض كافة محطات الجمهورية', desc: 'ضبط الخريطة لإظهار جميع المحطات' },
       { key: 'quickList', icon: '📑', label: 'زر قائمة المحطات العائم', desc: 'اختصار فتح القائمة أسفل يسار الخريطة' },
+      { key: 'mapLayerToggle', icon: '🛰️', label: 'زر التبديل (شوارع / قمر صناعي)', desc: 'التبديل بين خريطة الشوارع وخريطة القمر الصناعي' },
     ];
 
     const renderToggleCard = (item: { key: keyof UserIconsVisibility; icon: string; label: string; desc: string }) => {
@@ -2194,6 +2239,7 @@ export class AdminModalComponent {
         'mapSearch',
         'recenterGps',
         'zoomControls',
+        'mapLayerToggle',
       ]);
       setAllIconCheckboxes((k) => essential.has(k));
     });

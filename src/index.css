@@ -110,6 +110,24 @@
   border: 1.5px solid rgba(0, 200, 83, 0.4);
 }
 
+#header-logo-trigger {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#header-logo-trigger img {
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+#admin-modal-container {
+  position: relative;
+  z-index: 1500;
+}
+
 .brand-title {
   color: var(--text-main);
 }
@@ -332,16 +350,17 @@
   box-shadow: 0 0 8px #F59E0B;
 }
 
-/* Map Style Switcher (Street / Night) */
+/* Map Style Switcher (Streets / Satellite) */
 .map-style-switcher {
   position: relative;
   z-index: 26;
   background: var(--bg-card);
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1.5px solid var(--border-color);
   color: var(--text-main);
   padding: 7px 12px;
-  border-radius: 14px;
+  border-radius: 9999px;
   font-size: 11px;
   font-weight: 800;
   display: flex;
@@ -349,14 +368,64 @@
   gap: 6px;
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .map-style-switcher:hover {
   background: var(--bg-card-sub);
   border-color: var(--cargas-green);
-  transform: scale(1.04);
+  transform: translateY(-1px);
+}
+
+.map-style-switcher.satellite-active {
+  background: rgba(14, 116, 144, 0.92);
+  border-color: rgba(56, 189, 248, 0.75);
+  color: #FFFFFF;
+  box-shadow: 0 6px 20px rgba(14, 116, 144, 0.45);
+}
+
+/* Dual-Logo Launch Splash Screen */
+#app-splash-screen {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 2000;
+  background: radial-gradient(circle at 50% 35%, #0D2C54 0%, #07162C 55%, #040914 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+#app-splash-screen.splash-fade-out {
+  opacity: 0;
+  transform: scale(1.03);
+  pointer-events: none;
+}
+
+.splash-stage {
+  transition: opacity 0.45s ease, transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.splash-stage-hidden {
+  opacity: 0;
+  transform: scale(0.92);
+  pointer-events: none;
+}
+
+@keyframes splashProgressFill {
+  0% { width: 0%; }
+  100% { width: 100%; }
+}
+
+.splash-progress-bar {
+  animation: splashProgressFill 3.5s linear forwards;
 }
 
 /* Glassmorphism Classes */

@@ -19,6 +19,8 @@ export class PwaService {
   private static isIOS = false;
   private static isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   private static swReady = false;
+  private static swRegistration: ServiceWorkerRegistration | null = null;
+  private static reloadingOnControllerChange = false;
   private static initialized = false;
   private static listeners: Set<(state: PwaState) => void> = new Set();
 
@@ -46,9 +48,16 @@ export class PwaService {
       this.notify();
     });
 
+    const checkSwUpdate = () => {
+      if (navigator.onLine && this.swRegistration) {
+        void this.swRegistration.update().catch(() => undefined);
+      }
+    };
+
     window.addEventListener('online', () => {
       this.isOnline = true;
       this.notify();
+      checkSwUpdate();
     });
 
     window.addEventListener('offline', () => {
@@ -56,13 +65,35 @@ export class PwaService {
       this.notify();
     });
 
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        checkSwUpdate();
+      }
+    });
+
+    const hadController =
+      typeof navigator !== 'undefined' &&
+      'serviceWorker' in navigator &&
+      Boolean(navigator.serviceWorker.controller);
+
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (hadController && !this.reloadingOnControllerChange) {
+          this.reloadingOnControllerChange = true;
+          window.location.reload();
+        }
+      });
+    }
+
     // Register Service Worker via vite-plugin-pwa
     try {
       registerSW({
         immediate: true,
-        onRegisteredSW: () => {
+        onRegisteredSW: (_swUrl, registration) => {
+          this.swRegistration = registration || null;
           this.swReady = true;
           this.notify();
+          checkSwUpdate();
         },
         onOfflineReady: () => {
           this.swReady = true;
@@ -75,9 +106,11 @@ export class PwaService {
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.ready
-        .then(() => {
+        .then((reg) => {
+          this.swRegistration = reg;
           this.swReady = true;
           this.notify();
+          checkSwUpdate();
         })
         .catch(() => {
           // ignore
