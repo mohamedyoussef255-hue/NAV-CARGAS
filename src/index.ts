@@ -36,6 +36,7 @@ class CargasApp {
   private visibleStations: Station[] = [];
   private userLocation: UserLocation;
   private hasInitialCentered = false;
+  private hasCenteredOnLiveGps = false;
   private selectedStation: Station | null = null;
   private isNavigating = false;
 
@@ -52,30 +53,34 @@ class CargasApp {
     const initialAppLogo = StationStorage.getAppLogo();
     const initialStationLogo = StationStorage.getStationLogo();
 
-    // 1. Setup DOM Containers + Dual-Logo Launch Splash Screen (3.5 seconds total)
+    // 1. Setup DOM Containers + Dual-Logo Launch Splash Screen (10 seconds total: 7s App Logo + 3s Stations Logo)
     const appEl = document.getElementById('app') || document.body;
     appEl.innerHTML = `
-      <!-- 3.5s Dual-Logo Splash Screen: App Logo (0-1.75s) -> Cargas Station Logo (1.75-3.5s) -->
+      <!-- 10s Dual-Logo Splash Screen: App Logo (0-7s) -> Cargas Station Logo (7-10s) -->
       <div id="app-splash-screen" dir="rtl">
-        <div class="relative w-full max-w-sm flex flex-col items-center justify-center min-h-[260px]">
+        <div class="relative w-full max-w-sm flex flex-col items-center justify-center min-h-[280px]">
           
-          <!-- Stage 1: App Logo -->
-          <div id="splash-stage-app" class="splash-stage flex flex-col items-center text-center gap-4">
-            <div class="w-32 h-32 sm:w-36 sm:h-36 rounded-3xl bg-slate-900/90 border-2 border-emerald-400/60 shadow-2xl shadow-emerald-500/20 p-4 flex items-center justify-center">
-              <img id="splash-app-logo-img" src="${initialAppLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="w-full h-full object-contain drop-shadow-xl" />
+          <!-- Stage 1: App Logo (7 seconds) -->
+          <div id="splash-stage-app" class="splash-stage flex flex-col items-center justify-center text-center gap-4 w-full">
+            <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-slate-900/90 border-2 border-emerald-400/60 shadow-2xl shadow-emerald-500/20 p-3.5 overflow-hidden flex items-center justify-center">
+              <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
+                <img id="splash-app-logo-img" src="${initialAppLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
+              </div>
             </div>
-            <div class="space-y-1">
+            <div class="space-y-1 px-2">
               <h2 id="splash-app-title" class="text-2xl sm:text-3xl font-black text-white tracking-tight">${escapeHtml(initialConfig.appName)}</h2>
               ${initialConfig.appSubtitle ? `<p class="text-sm font-bold text-emerald-300">${escapeHtml(initialConfig.appSubtitle)}</p>` : ''}
             </div>
           </div>
 
-          <!-- Stage 2: Cargas Station Logo -->
-          <div id="splash-stage-station" class="splash-stage splash-stage-hidden absolute inset-0 flex flex-col items-center justify-center text-center gap-4">
-            <div class="relative w-32 h-32 sm:w-36 sm:h-36 rounded-full bg-gradient-to-br from-emerald-950 to-slate-900 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/30 p-4 flex items-center justify-center">
-              <img id="splash-station-logo-img" src="${initialStationLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Cargas Station Logo" class="w-full h-full object-contain drop-shadow-xl" />
+          <!-- Stage 2: Cargas Station Logo (3 seconds) -->
+          <div id="splash-stage-station" class="splash-stage splash-stage-hidden absolute inset-0 flex flex-col items-center justify-center text-center gap-4 w-full">
+            <div class="w-32 h-32 sm:w-36 sm:h-36 shrink-0 rounded-3xl bg-gradient-to-br from-emerald-950 to-slate-900 border-2 border-emerald-400 shadow-2xl shadow-emerald-500/30 p-3.5 overflow-hidden flex items-center justify-center">
+              <div class="w-full h-full rounded-2xl overflow-hidden flex items-center justify-center">
+                <img id="splash-station-logo-img" src="${initialStationLogo}" draggable="false" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="Cargas Station Logo" class="max-w-full max-h-full w-full h-full object-contain block drop-shadow-xl" />
+              </div>
             </div>
-            <div class="space-y-1">
+            <div class="space-y-1 px-2">
               <div class="text-xl sm:text-2xl font-black text-emerald-300">محطات غاز كارجاس</div>
               <p class="text-xs sm:text-sm font-bold text-slate-300">${escapeHtml(initialConfig.appDescription)}</p>
             </div>
@@ -83,7 +88,7 @@ class CargasApp {
 
         </div>
 
-        <!-- Animated 3.5s Progress Indicator -->
+        <!-- Animated 10s Progress Indicator -->
         <div class="w-56 sm:w-64 mt-8 space-y-2 text-center">
           <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
             <div class="splash-progress-bar h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 rounded-full"></div>
@@ -401,21 +406,41 @@ class CargasApp {
       this.locationModal.show();
     });
 
-    document.getElementById('btn-recenter-user')?.addEventListener('click', async () => {
+    const recenterBtn = document.getElementById('btn-recenter-user') as HTMLButtonElement | null;
+    recenterBtn?.addEventListener('click', async () => {
       SoundService.playChime('click');
-      this.map.recenterUser(this.userLocation);
-      const district = LocationService.getDistrictOrCityName(this.userLocation.lat, this.userLocation.lng);
-      ToastService.show(`📍 موقعك الحالي: ${district}`, 'info', 2500);
+      recenterBtn.disabled = true;
+      recenterBtn.classList.add('animate-pulse');
+      ToastService.show('📡 جارٍ تحديث موقعك الفعلي عبر الـ GPS...', 'info', 2000);
 
-      if (!LocationService.getDiagnostics().hasManualOverride) {
+      try {
         const res = await LocationService.forceRefreshGPS();
+        this.userLocation = res.loc;
+        this.listModal.updateData(this.stations, this.userLocation);
+        this.mapSearch.updateData(this.stations, this.userLocation);
+
         if (res.success) {
-          this.userLocation = res.loc;
+          this.hasCenteredOnLiveGps = true;
           this.map.updateUserLocation(this.userLocation, true);
+          this.map.flyToLocation(this.userLocation.lat, this.userLocation.lng, 15);
+          if (this.selectedStation) {
+            this.selectedStation.distanceKm = LocationService.getDistanceKm(
+              this.userLocation.lat,
+              this.userLocation.lng,
+              this.selectedStation.lat,
+              this.selectedStation.lng
+            );
+            this.stationCard.show(this.selectedStation);
+          }
+          SoundService.playChime('start');
+          ToastService.show(`✅ ${res.message}`, 'success', 3500);
+        } else {
           this.map.recenterUser(this.userLocation);
-          this.listModal.updateData(this.stations, this.userLocation);
-          this.mapSearch.updateData(this.stations, this.userLocation);
+          ToastService.show(res.message, 'warning', 4500);
         }
+      } finally {
+        recenterBtn.disabled = false;
+        recenterBtn.classList.remove('animate-pulse');
       }
     });
 
@@ -583,16 +608,16 @@ class CargasApp {
     const statusLabel = document.getElementById('splash-status-label');
     if (!splash) return;
 
-    // Phase 2 at 1.75s: transition from App Logo to Cargas Stations Logo
+    // Phase 1: App Logo stays for 7 seconds, then transitions to Cargas Stations Logo for 3 seconds (10s total)
     setTimeout(() => {
       stageApp?.classList.add('splash-stage-hidden');
       stageStation?.classList.remove('splash-stage-hidden');
       if (statusLabel) {
         statusLabel.textContent = 'جارٍ تحميل محطات كارجاس على الخريطة...';
       }
-    }, 1750);
+    }, 7000);
 
-    // Reveal the interactive map at 3.5s
+    // Phase 2: Reveal the interactive map after 10 seconds total (7s + 3s)
     setTimeout(() => {
       splash.classList.add('splash-fade-out');
       this.map?.invalidateSize();
@@ -600,7 +625,7 @@ class CargasApp {
         splash.remove();
         this.map?.invalidateSize();
       }, 420);
-    }, 3500);
+    }, 10000);
   }
 
   private renderMapStations(): void {
@@ -616,19 +641,44 @@ class CargasApp {
   // Starts continuous live GPS location tracking
   private startGpsTracking(): void {
     LocationService.startTracking((loc) => {
-      this.userLocation = loc;
-      this.map.updateUserLocation(loc);
+      const prevLat = this.userLocation?.lat;
+      const prevLng = this.userLocation?.lng;
+      const movedKm =
+        Number.isFinite(prevLat) && Number.isFinite(prevLng)
+          ? LocationService.getDistanceKm(prevLat, prevLng, loc.lat, loc.lng)
+          : 0;
 
-      // On first GPS reception, fly to user location smoothly
+      this.userLocation = loc;
+      const isLiveGps = !loc.isSimulated;
+
+      // Center initially on hint/default, and ALWAYS re-fly once real hardware GPS locks or user moves significantly (>300m)
       if (!this.hasInitialCentered) {
         this.hasInitialCentered = true;
+        this.map.updateUserLocation(loc, false);
         this.map.flyToLocation(loc.lat, loc.lng, 13);
+      } else if (isLiveGps && (!this.hasCenteredOnLiveGps || movedKm > 0.3 || this.isNavigating)) {
+        const firstLiveLock = !this.hasCenteredOnLiveGps;
+        this.hasCenteredOnLiveGps = true;
+        this.map.updateUserLocation(loc, !firstLiveLock);
+        if (firstLiveLock) {
+          this.map.flyToLocation(loc.lat, loc.lng, 14);
+        }
+      } else {
+        this.map.updateUserLocation(loc, false);
       }
 
-      // Update distance in open card or list
+      // Update distance in open card or list in real time
       if (this.selectedStation) {
-        const dist = LocationService.getDistanceKm(loc.lat, loc.lng, this.selectedStation.lat, this.selectedStation.lng);
+        const dist = LocationService.getDistanceKm(
+          loc.lat,
+          loc.lng,
+          this.selectedStation.lat,
+          this.selectedStation.lng
+        );
         this.selectedStation.distanceKm = dist;
+        if (!this.isNavigating && movedKm > 0.05) {
+          this.stationCard.show(this.selectedStation);
+        }
       }
 
       this.listModal.updateData(this.stations, this.userLocation);

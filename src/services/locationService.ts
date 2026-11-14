@@ -70,9 +70,10 @@ export const PREDEFINED_LOCATIONS: PredefinedLocation[] = [
   { id: 'assiut-city', name: 'أسيوط', governorate: 'أسيوط', lat: 27.1809, lng: 31.1837, description: 'ميدان المحطة / الجامعة' },
 ];
 
-const STORAGE_KEY_MANUAL_LOC = 'cargas_user_manual_loc_v2';
-// Browser IP/cell-tower geolocation frequently reports ISP/hub centers with accuracy > 1.2km.
-const MAX_ACCEPTABLE_ACCURACY_METERS = 1200;
+const LEGACY_MANUAL_LOC_KEY = 'cargas_user_manual_loc_v2';
+const STORAGE_KEY_LAST_GPS_HINT = 'cargas_last_gps_hint_v3';
+// Accept initial assisted GPS up to 3.5km so devices indoors still update away from old cities, while continuous watchPosition refines to <20m.
+const MAX_ACCEPTABLE_ACCURACY_METERS = 3500;
 const HIGH_ACCURACY_OPTIONS: PositionOptions = {
   enableHighAccuracy: true,
   timeout: 15000,
@@ -80,8 +81,8 @@ const HIGH_ACCURACY_OPTIONS: PositionOptions = {
 };
 const BALANCED_FALLBACK_OPTIONS: PositionOptions = {
   enableHighAccuracy: false,
-  timeout: 8000,
-  maximumAge: 10000,
+  timeout: 10000,
+  maximumAge: 0,
 };
 
 export class LocationService {
@@ -91,6 +92,7 @@ export class LocationService {
   private static lastErrorCode: GpsErrorCode | null = null;
   private static permissionState: PermissionState | 'unsupported' = 'unsupported';
   private static permissionObserverAttached = false;
+  private static lifecycleListenersAttached = false;
   private static gpsWarningMessage: string | null = null;
   private static lastBrowserAccuracy: number | null = null;
   private static lastAcceptedAccuracy: number | null = null;
@@ -101,23 +103,25 @@ export class LocationService {
   private static isTracking = false;
 
   private static initInitialLocation(): UserLocation {
+    // Clean up legacy permanent manual lock so automatic hardware GPS always works across days/locations
     try {
-      const stored = localStorage.getItem(STORAGE_KEY_MANUAL_LOC);
-      if (stored) {
-        const parsed = JSON.parse(stored);
+      localStorage.removeItem(LEGACY_MANUAL_LOC_KEY);
+      const hintRaw = localStorage.getItem(STORAGE_KEY_LAST_GPS_HINT);
+      if (hintRaw) {
+        const parsed = JSON.parse(hintRaw);
         if (
           parsed &&
           typeof parsed.lat === 'number' &&
           typeof parsed.lng === 'number' &&
           LocationService.isWithinEgypt(parsed.lat, parsed.lng)
         ) {
-          LocationService.hasManualOverride = true;
-          LocationService.gpsStatus = 'manual';
+          LocationService.hasManualOverride = false;
+          LocationService.gpsStatus = 'pending';
           return {
             lat: parsed.lat,
             lng: parsed.lng,
-            accuracy: 10,
-            timestamp: Date.now(),
+            accuracy: 500,
+            timestamp: 0,
             isSimulated: true,
           };
         }
@@ -126,13 +130,14 @@ export class LocationService {
       // ignore storage errors
     }
 
-    // Guaranteed Default: Cairo Downtown / Tahrir Square
+    // Guaranteed Default: Cairo Downtown / Tahrir Square until live GPS locks
+    LocationService.hasManualOverride = false;
     LocationService.gpsStatus = 'pending';
     return {
       lat: 30.0444,
       lng: 31.2357,
-      accuracy: 25,
-      timestamp: Date.now(),
+      accuracy: 500,
+      timestamp: 0,
       isSimulated: true,
     };
   }
@@ -355,13 +360,18 @@ export class LocationService {
       return;
     }
 
-    // 3. During continuous watchPosition updates, prevent sudden accuracy regression unless previous fix is >30s old
+    const movedMeters =
+      this.getDistanceKm(this.currentLocation.lat, this.currentLocation.lng, lat, lng) * 1000;
+
+    // 3. During continuous watchPosition updates, only reject temporary accuracy regression if user barely moved (<120m) and previous fix is recent (<15s)
     if (
       isWatchUpdate &&
+      !this.currentLocation.isSimulated &&
       this.lastAcceptedAccuracy !== null &&
-      roundedAccuracy > this.lastAcceptedAccuracy * 2 &&
-      roundedAccuracy > 80 &&
-      Date.now() - (this.currentLocation.timestamp || 0) < 30000
+      roundedAccuracy > this.lastAcceptedAccuracy * 2.5 &&
+      roundedAccuracy > 120 &&
+      movedMeters < 120 &&
+      Date.now() - (this.currentLocation.timestamp || 0) < 15000
     ) {
       return;
     }
@@ -371,21 +381,23 @@ export class LocationService {
       isWatchUpdate &&
       !this.currentLocation.isSimulated &&
       this.lastAcceptedAccuracy !== null &&
-      roundedAccuracy >= this.lastAcceptedAccuracy
+      roundedAccuracy >= this.lastAcceptedAccuracy &&
+      movedMeters < 5
     ) {
-      const movedMeters =
-        this.getDistanceKm(this.currentLocation.lat, this.currentLocation.lng, lat, lng) * 1000;
-      if (movedMeters < 5) {
-        return;
-      }
+      return;
     }
 
-    // 5. Accept high-accuracy GPS location inside Egypt
+    // 5. Accept live GPS location inside Egypt & store as fast cold-start hint only (never blocks future GPS!)
     this.lastRejectedLocation = null;
     this.lastAcceptedAccuracy = roundedAccuracy;
     this.gpsStatus = 'accurate';
     this.lastErrorCode = null;
     this.gpsWarningMessage = null;
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_GPS_HINT, JSON.stringify({ lat, lng }));
+    } catch {
+      // ignore
+    }
     this.updateLocation({
       lat,
       lng,
@@ -435,6 +447,25 @@ export class LocationService {
     );
   }
 
+  private static attachLifecycleRefresh(): void {
+    if (this.lifecycleListenersAttached || typeof window === 'undefined' || typeof document === 'undefined') return;
+    this.lifecycleListenersAttached = true;
+
+    const refreshOnResume = () => {
+      if (this.hasManualOverride) return;
+      this.requestCurrentFix(true);
+      this.startWatchLoop();
+    };
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        refreshOnResume();
+      }
+    });
+    window.addEventListener('focus', refreshOnResume);
+    window.addEventListener('pageshow', refreshOnResume);
+  }
+
   private static startWatchLoop(): void {
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
     if (this.watchId !== null) {
@@ -448,7 +479,7 @@ export class LocationService {
         {
           enableHighAccuracy: true,
           timeout: 20000,
-          maximumAge: 2000,
+          maximumAge: 0,
         }
       );
     } catch (e) {
@@ -481,6 +512,7 @@ export class LocationService {
     // Attempt hardware GPS directly even inside APK WebView file:// / local origins
     this.isTracking = true;
     this.attachPermissionObserver();
+    this.attachLifecycleRefresh();
     try {
       this.requestCurrentFix(true);
       this.startWatchLoop();
@@ -521,20 +553,12 @@ export class LocationService {
     };
   }
 
-  // Allows user to manually set their exact position (from preset, Nominatim search, map click, or pin drag)
-  static setManualLocation(lat: number, lng: number, persist = true): void {
+  // Allows user to manually set their position for the current session without permanently locking tomorrow's GPS
+  static setManualLocation(lat: number, lng: number, _persist = false): void {
     this.hasManualOverride = true;
     this.gpsStatus = 'manual';
     this.lastErrorCode = null;
     this.gpsWarningMessage = null;
-
-    if (persist) {
-      try {
-        localStorage.setItem(STORAGE_KEY_MANUAL_LOC, JSON.stringify({ lat, lng }));
-      } catch {
-        // ignore
-      }
-    }
 
     this.updateLocation({
       lat,
@@ -549,15 +573,10 @@ export class LocationService {
   static acceptRejectedLocation(): boolean {
     if (!this.lastRejectedLocation) return false;
     const { lat, lng, accuracy } = this.lastRejectedLocation;
-    this.hasManualOverride = true;
-    this.gpsStatus = 'manual';
+    this.hasManualOverride = false;
+    this.gpsStatus = 'accurate';
     this.lastErrorCode = null;
     this.gpsWarningMessage = null;
-    try {
-      localStorage.setItem(STORAGE_KEY_MANUAL_LOC, JSON.stringify({ lat, lng }));
-    } catch {
-      // ignore
-    }
     this.updateLocation({
       lat,
       lng,
@@ -586,7 +605,7 @@ export class LocationService {
     this.lastAcceptedAccuracy = null;
     this.gpsWarningMessage = null;
     try {
-      localStorage.removeItem(STORAGE_KEY_MANUAL_LOC);
+      localStorage.removeItem(LEGACY_MANUAL_LOC_KEY);
     } catch {
       // ignore
     }
@@ -676,6 +695,11 @@ export class LocationService {
         this.gpsStatus = 'accurate';
         this.lastErrorCode = null;
         this.gpsWarningMessage = null;
+        try {
+          localStorage.setItem(STORAGE_KEY_LAST_GPS_HINT, JSON.stringify({ lat, lng }));
+        } catch {
+          // ignore
+        }
         const nextLoc: UserLocation = {
           lat,
           lng,

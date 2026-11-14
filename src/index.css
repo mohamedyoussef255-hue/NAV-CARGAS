@@ -427,7 +427,7 @@
 }
 
 .splash-progress-bar {
-  animation: splashProgressFill 3.5s linear forwards;
+  animation: splashProgressFill 10s linear forwards;
 }
 
 /* Glassmorphism Classes */

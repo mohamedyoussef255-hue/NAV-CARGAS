@@ -67,7 +67,7 @@ if (!self.define) {
     });
   };
 }
-define(['./workbox-b1bafff1'], (function (workbox) { 'use strict';
+define(['./workbox-afac4cd2'], (function (workbox) { 'use strict';
 
   self.skipWaiting();
   workbox.clientsClaim();
@@ -77,11 +77,8 @@ define(['./workbox-b1bafff1'], (function (workbox) { 'use strict';
    * See https://goo.gl/S9QRab
    */
   workbox.precacheAndRoute([{
-    "url": "registerSW.js",
-    "revision": "3ca0b8505b4bec776b69afdba2768812"
-  }, {
     "url": "index.html",
-    "revision": "0.glna7hv9cco"
+    "revision": "0.pqrbv99l66g"
   }], {});
   workbox.cleanupOutdatedCaches();
   workbox.registerRoute(new workbox.NavigationRoute(workbox.createHandlerBoundToURL("index.html"), {
@@ -105,6 +102,15 @@ define(['./workbox-b1bafff1'], (function (workbox) { 'use strict';
       statuses: [0, 200]
     })]
   }), 'GET');
+  workbox.registerRoute(/^https:\/\/(server|services)\.arcgisonline\.com\/.*/i, new workbox.CacheFirst({
+    "cacheName": "cargas-satellite-tiles-v1",
+    plugins: [new workbox.ExpirationPlugin({
+      maxEntries: 20000,
+      maxAgeSeconds: 10368000
+    }), new workbox.CacheableResponsePlugin({
+      statuses: [0, 200]
+    })]
+  }), 'GET');
   workbox.registerRoute(/^https:\/\/fonts\.googleapis\.com\/.*/i, new workbox.CacheFirst({
     "cacheName": "google-fonts-cache",
     plugins: [new workbox.ExpirationPlugin({
@@ -119,15 +125,6 @@ define(['./workbox-b1bafff1'], (function (workbox) { 'use strict';
     plugins: [new workbox.ExpirationPlugin({
       maxEntries: 20,
       maxAgeSeconds: 31536000
-    }), new workbox.CacheableResponsePlugin({
-      statuses: [0, 200]
-    })]
-  }), 'GET');
-  workbox.registerRoute(/^https:\/\/cdn\.tailwindcss\.com\/.*/i, new workbox.StaleWhileRevalidate({
-    "cacheName": "tailwind-cdn-cache",
-    plugins: [new workbox.ExpirationPlugin({
-      maxEntries: 10,
-      maxAgeSeconds: 2592000
     }), new workbox.CacheableResponsePlugin({
       statuses: [0, 200]
     })]
