@@ -5,6 +5,7 @@ import { ToastService } from '../services/toastService';
 import { escapeHtml } from '../utils/html';
 import { normalizeArabicSearch } from '../utils/arabicSearch';
 import { getStationNavigationUrls, canLaunchNativeGeoUri } from '../utils/navigationLinks';
+import { SecretTapController } from '../utils/secretTap';
 
 export class StationListModalComponent {
   private container: HTMLElement;
@@ -12,6 +13,8 @@ export class StationListModalComponent {
   private userLocation: UserLocation;
   private onSelectStationCallback: (station: Station) => void;
   private onNavigateStationCallback?: (station: Station) => void;
+  private onTriggerAdminCallback?: () => void;
+  private secretTapController: SecretTapController;
   private searchQuery = '';
   private selectedGov = 'all';
   private selectedService = 'all';
@@ -22,12 +25,19 @@ export class StationListModalComponent {
     handlers: {
       onSelectStation: (station: Station) => void;
       onNavigateStation?: (station: Station) => void;
+      onTriggerAdmin?: () => void;
     }
   ) {
     this.container = container;
     this.userLocation = userLocation;
     this.onSelectStationCallback = handlers.onSelectStation;
     this.onNavigateStationCallback = handlers.onNavigateStation;
+    this.onTriggerAdminCallback = handlers.onTriggerAdmin;
+    this.secretTapController = new SecretTapController({
+      requiredTaps: 5,
+      windowMs: 2500,
+      onTrigger: () => this.onTriggerAdminCallback?.(),
+    });
   }
 
   updateData(stations: Station[], userLocation: UserLocation): void {
@@ -52,6 +62,7 @@ export class StationListModalComponent {
   }
 
   hide(): void {
+    this.secretTapController.reset();
     this.container.classList.add('hidden');
     this.container.innerHTML = '';
   }
@@ -194,6 +205,16 @@ export class StationListModalComponent {
                 </button>
                 <button data-service="canopy" class="filter-chip ${this.selectedService === 'canopy' ? 'active' : ''} px-3 py-1.5 rounded-xl border text-xs font-bold transition-all">
                   ⛽ زيوت مظلة
+                </button>
+                <button
+                  type="button"
+                  id="btn-secret-list-settings"
+                  class="filter-chip px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center touch-manipulation select-none"
+                >
+                  <svg class="w-4 h-4 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                  </svg>
                 </button>
               </div>
 
@@ -375,6 +396,11 @@ export class StationListModalComponent {
         this.render();
       });
     });
+
+    if (this.onTriggerAdminCallback) {
+      const secretSettingsBtn = this.container.querySelector('#btn-secret-list-settings') as HTMLElement | null;
+      this.secretTapController.bind(secretSettingsBtn);
+    }
 
     this.container.querySelectorAll('[data-station-action="geo"]').forEach((link) => {
       link.addEventListener('click', (e) => {

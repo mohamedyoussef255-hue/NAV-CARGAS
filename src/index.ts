@@ -305,6 +305,15 @@ class CargasApp {
         this.map.focusStation(station, 15);
         void this.handleStartNavigation(station);
       },
+      onTriggerAdmin: () => {
+        this.adminModal?.show();
+        window.setTimeout(() => {
+          const adminEl = document.getElementById('admin-modal-container');
+          if (adminEl && !adminEl.classList.contains('hidden')) {
+            this.listModal.hide();
+          }
+        }, 750);
+      },
     });
 
     // 8. Initialize Secret Password-Protected Admin Modal (triggered by 5 taps on App Logo)

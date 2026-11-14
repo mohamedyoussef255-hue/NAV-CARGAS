@@ -5,10 +5,10 @@ import { SoundService } from '../services/soundService';
 import { PwaService, PwaState } from '../services/pwaService';
 import { DEFAULT_CARGAS_LOGO_DATA_URL } from '../assets/cargasLogo';
 import { escapeHtml } from '../utils/html';
+import { SecretTapController } from '../utils/secretTap';
 
 export class HeaderComponent {
-  private logoClickCount = 0;
-  private logoClickTimer: ReturnType<typeof setTimeout> | null = null;
+  private secretTapController: SecretTapController;
   private enableSecretAdmin: boolean;
   private onTriggerAdminCallback?: () => void;
   private onFindNearestCallback: () => void;
@@ -28,6 +28,11 @@ export class HeaderComponent {
   }) {
     this.enableSecretAdmin = Boolean(handlers.enableSecretAdmin);
     this.onTriggerAdminCallback = handlers.onTriggerAdmin;
+    this.secretTapController = new SecretTapController({
+      requiredTaps: 5,
+      windowMs: 2500,
+      onTrigger: () => this.onTriggerAdminCallback?.(),
+    });
     this.onFindNearestCallback = handlers.onFindNearest;
     this.onOpenListCallback = handlers.onOpenList;
     this.onToggleThemeCallback = handlers.onToggleTheme;
@@ -244,96 +249,7 @@ export class HeaderComponent {
     if (this.enableSecretAdmin && this.onTriggerAdminCallback) {
       const logoTrigger = container.querySelector('#header-logo-trigger') as HTMLElement | null;
       const logoBox = logoTrigger?.querySelector('.logo-box') as HTMLElement | null;
-      if (logoTrigger) {
-        let pointerDownPos: { x: number; y: number } | null = null;
-        let lastPointerTapAt = 0;
-        let justOpenedAdminAt = 0;
-
-        const focusAdminPasswordInput = () => {
-          const pwdInput = document.getElementById('admin-password-input') as HTMLInputElement | null;
-          if (!pwdInput) return;
-          pwdInput.focus();
-          pwdInput.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-        };
-
-        const registerLogoTap = () => {
-          this.logoClickCount++;
-          if (this.logoClickTimer) {
-            clearTimeout(this.logoClickTimer);
-            this.logoClickTimer = null;
-          }
-
-          if (logoBox) {
-            logoBox.style.transform = 'scale(0.92)';
-            setTimeout(() => {
-              logoBox.style.transform = '';
-            }, 90);
-          }
-
-          if (this.logoClickCount >= 5) {
-            this.logoClickCount = 0;
-            justOpenedAdminAt = performance.now();
-            (document.activeElement as HTMLElement | null)?.blur?.();
-            this.onTriggerAdminCallback?.();
-            focusAdminPasswordInput();
-            try {
-              SoundService.playChime('start');
-            } catch {
-              // ignore WebAudio restrictions in mobile WebViews
-            }
-          } else {
-            this.logoClickTimer = setTimeout(() => {
-              this.logoClickCount = 0;
-              this.logoClickTimer = null;
-            }, 2500);
-          }
-        };
-
-        logoTrigger.addEventListener('dblclick', (e) => {
-          if (e.cancelable) e.preventDefault();
-        });
-
-        logoTrigger.addEventListener('pointerdown', (e) => {
-          if (e.pointerType === 'mouse' && e.button !== 0) return;
-          pointerDownPos = { x: e.clientX, y: e.clientY };
-        });
-
-        logoTrigger.addEventListener('pointerup', (e) => {
-          if (e.pointerType === 'mouse' && e.button !== 0) return;
-          if (pointerDownPos) {
-            const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
-            pointerDownPos = null;
-            if (dist > 44) return;
-          }
-          lastPointerTapAt = performance.now();
-          registerLogoTap();
-        });
-
-        logoTrigger.addEventListener('pointercancel', () => {
-          pointerDownPos = null;
-        });
-
-        logoTrigger.addEventListener('click', (e) => {
-          // If pointerup just opened the admin password modal, reinforce focus inside this genuine click gesture so mobile WebView opens the keyboard
-          if (performance.now() - justOpenedAdminAt < 650) {
-            e.stopPropagation();
-            focusAdminPasswordInput();
-            return;
-          }
-          // Deduplicate trailing click after pointerup, while still supporting accessibility/keyboard clicks (detail === 0)
-          if (e.detail !== 0 && performance.now() - lastPointerTapAt < 450) {
-            return;
-          }
-          registerLogoTap();
-        });
-
-        logoTrigger.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            registerLogoTap();
-          }
-        });
-      }
+      this.secretTapController.bind(logoTrigger, logoBox);
     }
 
     container.querySelector('#btn-nearest-station')?.addEventListener('click', () => {
