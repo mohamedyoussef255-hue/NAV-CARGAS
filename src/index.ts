@@ -37,6 +37,7 @@ class CargasApp {
   private userLocation: UserLocation;
   private hasInitialCentered = false;
   private hasCenteredOnLiveGps = false;
+  private lastAutoCenteredLoc: { lat: number; lng: number } | null = null;
   private selectedStation: Station | null = null;
   private isNavigating = false;
 
@@ -333,7 +334,10 @@ class CargasApp {
       });
 
       const params = new URLSearchParams(window.location.search);
-      if (params.get('admin') === '1') {
+      const isAdminRoute =
+        window.location.pathname.replace(/\/+$/, '') === '/admin' || params.get('admin') === '1';
+      if (isAdminRoute) {
+        document.getElementById('app-splash-screen')?.remove();
         this.adminModal.show('manage');
       }
     }
@@ -421,6 +425,7 @@ class CargasApp {
 
         if (res.success) {
           this.hasCenteredOnLiveGps = true;
+          this.lastAutoCenteredLoc = { lat: this.userLocation.lat, lng: this.userLocation.lng };
           this.map.updateUserLocation(this.userLocation, true);
           this.map.flyToLocation(this.userLocation.lat, this.userLocation.lng, 15);
           if (this.selectedStation) {
@@ -437,6 +442,9 @@ class CargasApp {
         } else {
           this.map.recenterUser(this.userLocation);
           ToastService.show(res.message, 'warning', 4500);
+          if (res.errorCode === 'permission_denied') {
+            this.locationModal.show();
+          }
         }
       } finally {
         recenterBtn.disabled = false;
@@ -517,12 +525,22 @@ class CargasApp {
       if (!badge || !statusText) return;
 
       const isWarning =
-        diag.status === 'low_accuracy' ||
         diag.status === 'outside_egypt' ||
         diag.status === 'denied' ||
         diag.status === 'timeout' ||
         diag.status === 'unavailable';
       badge.classList.toggle('warning', isWarning);
+
+      if (diag.location.isSimulated && diag.status !== 'manual') {
+        if (diag.status === 'pending') {
+          statusText.textContent = '⏳ جارٍ تحديد موقعك عبر الـ GPS...';
+        } else if (diag.status === 'denied') {
+          statusText.textContent = '🚫 فعّل إذن الـ GPS أو اضغط لتحديد موقعك';
+        } else {
+          statusText.textContent = '⚠️ GPS غير متاح • اضغط لتحديد موقعك';
+        }
+        return;
+      }
 
       const prefix =
         diag.status === 'accurate'
@@ -651,14 +669,24 @@ class CargasApp {
       this.userLocation = loc;
       const isLiveGps = !loc.isSimulated;
 
-      // Center initially on hint/default, and ALWAYS re-fly once real hardware GPS locks or user moves significantly (>300m)
+      const cumulativeMovedKm = this.lastAutoCenteredLoc
+        ? LocationService.getDistanceKm(
+            this.lastAutoCenteredLoc.lat,
+            this.lastAutoCenteredLoc.lng,
+            loc.lat,
+            loc.lng
+          )
+        : Infinity;
+
+      // Center initially on default, and ALWAYS re-fly once real hardware GPS locks or user moves cumulatively (>120m)
       if (!this.hasInitialCentered) {
         this.hasInitialCentered = true;
         this.map.updateUserLocation(loc, false);
         this.map.flyToLocation(loc.lat, loc.lng, 13);
-      } else if (isLiveGps && (!this.hasCenteredOnLiveGps || movedKm > 0.3 || this.isNavigating)) {
+      } else if (isLiveGps && (!this.hasCenteredOnLiveGps || cumulativeMovedKm > 0.12 || this.isNavigating)) {
         const firstLiveLock = !this.hasCenteredOnLiveGps;
         this.hasCenteredOnLiveGps = true;
+        this.lastAutoCenteredLoc = { lat: loc.lat, lng: loc.lng };
         this.map.updateUserLocation(loc, !firstLiveLock);
         if (firstLiveLock) {
           this.map.flyToLocation(loc.lat, loc.lng, 14);
@@ -667,7 +695,7 @@ class CargasApp {
         this.map.updateUserLocation(loc, false);
       }
 
-      // Update distance in open card or list in real time
+      // Update distance in open card, route while navigating, or list in real time
       if (this.selectedStation) {
         const dist = LocationService.getDistanceKm(
           loc.lat,
@@ -678,6 +706,20 @@ class CargasApp {
         this.selectedStation.distanceKm = dist;
         if (!this.isNavigating && movedKm > 0.05) {
           this.stationCard.show(this.selectedStation);
+        } else if (this.isNavigating && isLiveGps && movedKm > 0.15) {
+          const destLat = Number(this.selectedStation.lat ?? this.selectedStation.latitude);
+          const destLng = Number(this.selectedStation.lng ?? this.selectedStation.longitude);
+          if (Number.isFinite(destLat) && Number.isFinite(destLng)) {
+            void RoutingService.getRoute(loc.lat, loc.lng, destLat, destLng)
+              .then((route) => {
+                if (this.isNavigating && this.selectedStation) {
+                  this.map.drawRoute(route);
+                }
+              })
+              .catch(() => {
+                // ignore background route recalculation failure
+              });
+          }
         }
       }
 

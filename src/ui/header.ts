@@ -285,7 +285,7 @@ export class HeaderComponent {
             this.logoClickTimer = setTimeout(() => {
               this.logoClickCount = 0;
               this.logoClickTimer = null;
-            }, 5000);
+            }, 2500);
           }
         };
 
@@ -301,6 +301,8 @@ export class HeaderComponent {
             pointerDownPos = null;
             if (dist > 44) return;
           }
+          // Prevent WebView double-tap zoom / text selection on rapid 5-tap sequences
+          if (e.cancelable) e.preventDefault();
           lastPointerTapAt = performance.now();
           registerLogoTap();
         });
@@ -310,9 +312,9 @@ export class HeaderComponent {
         });
 
         logoTrigger.addEventListener('click', (e) => {
+          if (e.cancelable) e.preventDefault();
           // If pointerup just opened the admin password modal, reinforce focus inside this genuine click gesture so mobile WebView opens the keyboard
           if (performance.now() - justOpenedAdminAt < 650) {
-            e.preventDefault();
             e.stopPropagation();
             focusAdminPasswordInput();
             return;

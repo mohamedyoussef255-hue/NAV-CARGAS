@@ -72,11 +72,14 @@ export const PREDEFINED_LOCATIONS: PredefinedLocation[] = [
 
 const LEGACY_MANUAL_LOC_KEY = 'cargas_user_manual_loc_v2';
 const STORAGE_KEY_LAST_GPS_HINT = 'cargas_last_gps_hint_v3';
-// Accept initial assisted GPS up to 3.5km so devices indoors still update away from old cities, while continuous watchPosition refines to <20m.
-const MAX_ACCEPTABLE_ACCURACY_METERS = 3500;
+const HINT_MAX_AGE_MS = 15 * 60 * 1000; // Only reuse warm-start hint for 15 minutes so previous locations never linger
+// Accept initial indoor cellular/Wi-Fi A-GPS up to 6.5km while rejecting desktop ISP IP guesses (>8km), then refine via continuous watchPosition.
+const INITIAL_ACCEPTABLE_ACCURACY_METERS = 6500;
+const CONTINUOUS_ACCEPTABLE_ACCURACY_METERS = 3500;
+const HEARTBEAT_INTERVAL_MS = 10000;
 const HIGH_ACCURACY_OPTIONS: PositionOptions = {
   enableHighAccuracy: true,
-  timeout: 15000,
+  timeout: 12000,
   maximumAge: 0,
 };
 const BALANCED_FALLBACK_OPTIONS: PositionOptions = {
@@ -87,6 +90,10 @@ const BALANCED_FALLBACK_OPTIONS: PositionOptions = {
 
 export class LocationService {
   private static watchId: number | null = null;
+  private static balancedWatchId: number | null = null;
+  private static heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private static lastWatchCallbackAt = 0;
+  private static medianPromptRequested = false;
   private static hasManualOverride = false;
   private static gpsStatus: GpsStatus = 'pending';
   private static lastErrorCode: GpsErrorCode | null = null;
@@ -102,6 +109,14 @@ export class LocationService {
   private static statusListeners: Set<(diag: LocationDiagnostics) => void> = new Set();
   private static isTracking = false;
 
+  private static saveGpsHint(lat: number, lng: number): void {
+    try {
+      localStorage.setItem(STORAGE_KEY_LAST_GPS_HINT, JSON.stringify({ lat, lng, ts: Date.now() }));
+    } catch {
+      // ignore storage errors
+    }
+  }
+
   private static initInitialLocation(): UserLocation {
     // Clean up legacy permanent manual lock so automatic hardware GPS always works across days/locations
     try {
@@ -109,10 +124,13 @@ export class LocationService {
       const hintRaw = localStorage.getItem(STORAGE_KEY_LAST_GPS_HINT);
       if (hintRaw) {
         const parsed = JSON.parse(hintRaw);
+        const hintAge = typeof parsed?.ts === 'number' ? Date.now() - parsed.ts : Infinity;
         if (
           parsed &&
           typeof parsed.lat === 'number' &&
           typeof parsed.lng === 'number' &&
+          hintAge >= 0 &&
+          hintAge < HINT_MAX_AGE_MS &&
           LocationService.isWithinEgypt(parsed.lat, parsed.lng)
         ) {
           LocationService.hasManualOverride = false;
@@ -124,6 +142,8 @@ export class LocationService {
             timestamp: 0,
             isSimulated: true,
           };
+        } else {
+          localStorage.removeItem(STORAGE_KEY_LAST_GPS_HINT);
         }
       }
     } catch {
@@ -241,32 +261,56 @@ export class LocationService {
     return `موقع داخل مصر (${lat.toFixed(3)}, ${lng.toFixed(3)})`;
   }
 
+  private static promptMedianLocationIfAvailable(forcePrompt = false): void {
+    if (typeof window === 'undefined') return;
+    if (this.medianPromptRequested && !forcePrompt) return;
+    const win = window as unknown as {
+      median?: { android?: { geoLocation?: { promptLocationServices?: () => void } } };
+      gonative?: { android?: { geoLocation?: { promptLocationServices?: () => void } } };
+    };
+    const promptFn =
+      win.median?.android?.geoLocation?.promptLocationServices ||
+      win.gonative?.android?.geoLocation?.promptLocationServices;
+    if (typeof promptFn === 'function') {
+      this.medianPromptRequested = true;
+      try {
+        promptFn();
+      } catch {
+        // ignore bridge error
+      }
+    }
+  }
+
   private static mapGeolocationError(err: GeolocationPositionError): {
     status: GpsStatus;
     code: GpsErrorCode;
     message: string;
   } {
     switch (err.code) {
-      case 1: // PERMISSION_DENIED
+      case 1: {
+        const msg = err.message || '';
+        const isPolicyBlocked = /permissions?\s*policy|disabled in this document/i.test(msg);
         return {
           status: 'denied',
           code: 'permission_denied',
-          message:
-            'تم رفض إذن الوصول للموقع. يرجى تفعيل صلاحية الموقع (Location) من إعدادات المتصفح بجانب شريط العنوان، أو تحديد موقعك يدوياً.',
+          message: isPolicyBlocked
+            ? 'إطار المعاينة الحالي لا يسمح بصلاحية الموقع تلقائياً. افتح التطبيق في المتصفح أو ثبّته على الهاتف للتتبع التلقائي، أو حدد موقعك يدوياً.'
+            : 'تم رفض إذن الوصول للموقع. فعّل صلاحية الموقع (GPS) من إعدادات المتصفح أو الهاتف، وسيتم التحديث تلقائياً.',
         };
+      }
       case 2: // POSITION_UNAVAILABLE
         return {
           status: 'unavailable',
           code: 'position_unavailable',
           message:
-            'تعذر التقاط إشارة الـ GPS أو تحديد الموقع من الجهاز حالياً. تأكد من تفعيل خدمة الموقع (GPS) أو اختر منطقتك يدوياً.',
+            'تعذر التقاط إشارة الـ GPS من الجهاز حالياً. تأكد من تشغيل خدمة الموقع (GPS) بالهاتف أو اختر منطقتك يدوياً.',
         };
       case 3: // TIMEOUT
         return {
           status: 'timeout',
           code: 'timeout',
           message:
-            'انتهت مهلة انتظار إشارة الـ GPS عالية الدقة. تأكد من وجودك في مكان مفتوح أو حدد موقعك على الخريطة.',
+            'انتهت مهلة انتظار إشارة الـ GPS عالية الدقة. تأكد من تشغيل الموقع أو تحرك لمكان مكشوف.',
         };
       default:
         return {
@@ -293,6 +337,7 @@ export class LocationService {
           if (permStatus.state === 'granted' && !this.hasManualOverride) {
             this.lastErrorCode = null;
             this.requestCurrentFix(true);
+            this.startWatchLoop();
           } else if (permStatus.state === 'denied' && !this.hasManualOverride) {
             this.gpsStatus = 'denied';
             this.lastErrorCode = 'permission_denied';
@@ -344,8 +389,11 @@ export class LocationService {
       return;
     }
 
-    // 2. Reject low-accuracy ISP/IP geolocation (e.g. reporting Menoufia/Delta from Cairo with >1.5km accuracy)
-    if (accuracy && accuracy > MAX_ACCEPTABLE_ACCURACY_METERS) {
+    // 2. Reject extreme low-accuracy ISP/IP geolocation (e.g. reporting Menoufia/Delta from Cairo with >8km accuracy)
+    const maxAccuracyAllowed = this.currentLocation.isSimulated
+      ? INITIAL_ACCEPTABLE_ACCURACY_METERS
+      : CONTINUOUS_ACCEPTABLE_ACCURACY_METERS;
+    if (accuracy && accuracy > maxAccuracyAllowed) {
       const guessedDistrict = this.getDistrictOrCityName(lat, lng);
       this.lastRejectedLocation = {
         lat,
@@ -355,7 +403,7 @@ export class LocationService {
       };
       this.gpsStatus = 'low_accuracy';
       this.lastErrorCode = null;
-      this.gpsWarningMessage = `دقة GPS المتصفح ضعيفة (±${(accuracy / 1000).toFixed(1)} كم في ${guessedDistrict}) — تم الإبقاء على موقع القاهرة لتجنب الخطأ. يمكنك تحديد موقعك بدقة من هنا.`;
+      this.gpsWarningMessage = `دقة GPS المتصفح ضعيفة (±${(accuracy / 1000).toFixed(1)} كم في ${guessedDistrict}) — يمكنك تحديد موقعك بدقة أو التحديث من الخارج.`;
       this.notifyStatusListeners();
       return;
     }
@@ -387,16 +435,21 @@ export class LocationService {
       return;
     }
 
-    // 5. Accept live GPS location inside Egypt & store as fast cold-start hint only (never blocks future GPS!)
+    // 5. Accept live GPS location inside Egypt & store as short-lived warm-start hint only
+    if (isWatchUpdate) {
+      this.lastWatchCallbackAt = Date.now();
+    }
     this.lastRejectedLocation = null;
     this.lastAcceptedAccuracy = roundedAccuracy;
-    this.gpsStatus = 'accurate';
+    this.gpsStatus = roundedAccuracy > 2500 ? 'low_accuracy' : 'accurate';
     this.lastErrorCode = null;
-    this.gpsWarningMessage = null;
-    try {
-      localStorage.setItem(STORAGE_KEY_LAST_GPS_HINT, JSON.stringify({ lat, lng }));
-    } catch {
-      // ignore
+    this.gpsWarningMessage =
+      roundedAccuracy > 2500
+        ? `تم تحديد المنطقة عبر الشبكة (±${(roundedAccuracy / 1000).toFixed(1)} كم) وجارٍ تحسين دقة الـ GPS...`
+        : null;
+    // Keep warm-start hint only for high/medium-accuracy fixes
+    if (roundedAccuracy <= 2500) {
+      this.saveGpsHint(lat, lng);
     }
     this.updateLocation({
       lat,
@@ -413,8 +466,13 @@ export class LocationService {
     const mapped = this.mapGeolocationError(err);
     console.warn(`Geolocation ${isWatchError ? 'watchPosition' : 'getCurrentPosition'} error [${err.code}]:`, err.message);
 
-    // If watch fails temporarily with timeout after we already have an accurate fix, keep the existing fix silently
-    if (isWatchError && this.gpsStatus === 'accurate' && mapped.code === 'timeout') {
+    // On Median.co / GoNative Android APKs, prompt native location services if initial watch/fix fails
+    if (err.code === 1 || err.code === 2) {
+      this.promptMedianLocationIfAvailable(false);
+    }
+
+    // If watch fails temporarily with timeout after we already have a live fix, keep the existing fix silently
+    if (isWatchError && !this.currentLocation.isSimulated && mapped.code === 'timeout') {
       return;
     }
 
@@ -426,14 +484,14 @@ export class LocationService {
     }
   }
 
-  private static requestCurrentFix(allowTimeoutFallback = true): void {
+  private static requestCurrentFix(allowFallback = true): void {
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
 
     navigator.geolocation.getCurrentPosition(
       (pos) => this.processBrowserPosition(pos, false),
       (err) => {
-        // If high-accuracy GPS times out indoors, retry once with balanced accuracy before reporting failure
-        if (allowTimeoutFallback && err.code === 3) {
+        // If high-accuracy GPS times out or is unavailable indoors, retry immediately with balanced network/A-GPS accuracy
+        if (allowFallback && (err.code === 3 || err.code === 2)) {
           navigator.geolocation.getCurrentPosition(
             (fallbackPos) => this.processBrowserPosition(fallbackPos, false),
             (fallbackErr) => this.handleGeolocationError(fallbackErr, false),
@@ -464,6 +522,43 @@ export class LocationService {
     });
     window.addEventListener('focus', refreshOnResume);
     window.addEventListener('pageshow', refreshOnResume);
+    window.addEventListener('online', refreshOnResume);
+  }
+
+  private static startBalancedWatch(): void {
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
+    if (this.balancedWatchId !== null) return;
+    try {
+      this.balancedWatchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          // Prefer high-accuracy satellite readings if received recently (<15s)
+          if (
+            !this.currentLocation.isSimulated &&
+            this.lastAcceptedAccuracy !== null &&
+            this.lastAcceptedAccuracy <= 80 &&
+            Date.now() - this.lastWatchCallbackAt < 15000 &&
+            (pos.coords.accuracy || 9999) > 250
+          ) {
+            return;
+          }
+          this.processBrowserPosition(pos, true);
+        },
+        () => {
+          // Silent cleanup of secondary balanced watch
+          if (this.balancedWatchId !== null) {
+            navigator.geolocation.clearWatch(this.balancedWatchId);
+            this.balancedWatchId = null;
+          }
+        },
+        {
+          enableHighAccuracy: false,
+          timeout: 15000,
+          maximumAge: 5000,
+        }
+      );
+    } catch {
+      this.balancedWatchId = null;
+    }
   }
 
   private static startWatchLoop(): void {
@@ -472,18 +567,50 @@ export class LocationService {
       navigator.geolocation.clearWatch(this.watchId);
       this.watchId = null;
     }
+    if (this.balancedWatchId !== null) {
+      navigator.geolocation.clearWatch(this.balancedWatchId);
+      this.balancedWatchId = null;
+    }
+
     try {
       this.watchId = navigator.geolocation.watchPosition(
         (pos) => this.processBrowserPosition(pos, true),
-        (err) => this.handleGeolocationError(err, true),
+        (err) => {
+          // If high-accuracy watch is blocked/times out indoors, ensure fused network watch keeps live updates flowing
+          if (err.code === 2 || err.code === 3) {
+            this.startBalancedWatch();
+          }
+          this.handleGeolocationError(err, true);
+        },
         {
           enableHighAccuracy: true,
-          timeout: 20000,
+          timeout: 15000,
           maximumAge: 0,
         }
       );
     } catch (e) {
       console.warn('Geolocation watchPosition threw synchronously:', e);
+    }
+
+    // Start secondary balanced fused watch whenever device hasn't locked high-accuracy yet
+    if (this.currentLocation.isSimulated || (this.lastAcceptedAccuracy ?? 9999) > 250) {
+      this.startBalancedWatch();
+    }
+
+    if (this.heartbeatTimer === null && typeof setInterval !== 'undefined') {
+      this.heartbeatTimer = setInterval(() => {
+        if (this.hasManualOverride || !this.isTracking) return;
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        // Skip polling only if browser explicitly confirmed permission denied; on Android WebView permissionState may still be 'granted'/'prompt' while OS GPS switch was toggled
+        if (this.lastErrorCode === 'permission_denied' && this.permissionState === 'denied') return;
+
+        if (Date.now() - this.lastWatchCallbackAt > HEARTBEAT_INTERVAL_MS - 1000) {
+          this.requestCurrentFix(true);
+          if (this.watchId === null) {
+            this.startWatchLoop();
+          }
+        }
+      }, HEARTBEAT_INTERVAL_MS);
     }
   }
 
@@ -513,6 +640,7 @@ export class LocationService {
     this.isTracking = true;
     this.attachPermissionObserver();
     this.attachLifecycleRefresh();
+    this.promptMedianLocationIfAvailable(false);
     try {
       this.requestCurrentFix(true);
       this.startWatchLoop();
@@ -531,6 +659,14 @@ export class LocationService {
     if (this.watchId !== null && typeof navigator !== 'undefined' && 'geolocation' in navigator) {
       navigator.geolocation.clearWatch(this.watchId);
       this.watchId = null;
+    }
+    if (this.balancedWatchId !== null && typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+      navigator.geolocation.clearWatch(this.balancedWatchId);
+      this.balancedWatchId = null;
+    }
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
     this.isTracking = false;
   }
@@ -604,6 +740,7 @@ export class LocationService {
     this.lastErrorCode = null;
     this.lastAcceptedAccuracy = null;
     this.gpsWarningMessage = null;
+    this.promptMedianLocationIfAvailable(true);
     try {
       localStorage.removeItem(LEGACY_MANUAL_LOC_KEY);
     } catch {
@@ -668,7 +805,7 @@ export class LocationService {
           return;
         }
 
-        if (accuracy && accuracy > MAX_ACCEPTABLE_ACCURACY_METERS) {
+        if (accuracy && accuracy > INITIAL_ACCEPTABLE_ACCURACY_METERS) {
           const guessed = this.getDistrictOrCityName(lat, lng);
           this.lastRejectedLocation = {
             lat,
@@ -692,14 +829,11 @@ export class LocationService {
 
         this.lastRejectedLocation = null;
         this.lastAcceptedAccuracy = roundedAccuracy;
-        this.gpsStatus = 'accurate';
+        this.lastWatchCallbackAt = Date.now();
+        this.gpsStatus = roundedAccuracy > 2500 ? 'low_accuracy' : 'accurate';
         this.lastErrorCode = null;
         this.gpsWarningMessage = null;
-        try {
-          localStorage.setItem(STORAGE_KEY_LAST_GPS_HINT, JSON.stringify({ lat, lng }));
-        } catch {
-          // ignore
-        }
+        this.saveGpsHint(lat, lng);
         const nextLoc: UserLocation = {
           lat,
           lng,
@@ -717,7 +851,7 @@ export class LocationService {
 
         resolve({
           success: true,
-          status: 'accurate',
+          status: this.gpsStatus,
           errorCode: null,
           loc: nextLoc,
           message: `تم تحديد موقعك بدقة عالية (±${roundedAccuracy} م) في ${this.getDistrictOrCityName(lat, lng)}`,
@@ -742,8 +876,8 @@ export class LocationService {
       navigator.geolocation.getCurrentPosition(
         handleSuccess,
         (err) => {
-          // On TIMEOUT with enableHighAccuracy: true, try balanced fallback before reporting timeout
-          if (err.code === 3) {
+          // On TIMEOUT or POSITION_UNAVAILABLE with high-accuracy GPS, try balanced network/A-GPS fallback
+          if (err.code === 3 || err.code === 2) {
             navigator.geolocation.getCurrentPosition(handleSuccess, handleFailure, BALANCED_FALLBACK_OPTIONS);
             return;
           }
