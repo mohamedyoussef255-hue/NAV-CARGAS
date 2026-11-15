@@ -30,7 +30,7 @@ export class HeaderComponent {
     this.onTriggerAdminCallback = handlers.onTriggerAdmin;
     this.secretTapController = new SecretTapController({
       requiredTaps: 5,
-      windowMs: 2500,
+      windowMs: 3500,
       onTrigger: () => this.onTriggerAdminCallback?.(),
     });
     this.onFindNearestCallback = handlers.onFindNearest;

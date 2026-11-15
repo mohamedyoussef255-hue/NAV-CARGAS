@@ -2,6 +2,7 @@ import { LocationService, PREDEFINED_LOCATIONS } from '../services/locationServi
 import { StationStorage } from '../services/stationStorage';
 import { SoundService } from '../services/soundService';
 import { ToastService } from '../services/toastService';
+import { isMedianOrWebView } from '../services/webviewGuard';
 import { normalizeArabicSearch } from '../utils/arabicSearch';
 
 interface NominatimResult {
@@ -18,6 +19,7 @@ export class LocationModalComponent {
   private isSearching = false;
   private isRefreshingGps = false;
   private searchQuery = '';
+  private unsubscribeStatus: (() => void) | null = null;
 
   constructor(
     container: HTMLElement,
@@ -33,10 +35,18 @@ export class LocationModalComponent {
 
   show(): void {
     this.container.classList.remove('hidden');
+    this.unsubscribeStatus?.();
+    this.unsubscribeStatus = LocationService.subscribeStatus(() => {
+      if (!this.container.classList.contains('hidden') && !this.isRefreshingGps) {
+        this.render();
+      }
+    });
     this.render();
   }
 
   hide(): void {
+    this.unsubscribeStatus?.();
+    this.unsubscribeStatus = null;
     this.container.classList.add('hidden');
     this.container.innerHTML = '';
   }
@@ -44,6 +54,7 @@ export class LocationModalComponent {
   private render(): void {
     const diag = LocationService.getDiagnostics();
     const { location, districtName, status, warningMessage, lastRejectedLocation } = diag;
+    const isApkWebView = isMedianOrWebView();
 
     const statusBadgeHtml = (() => {
       switch (status) {
@@ -118,6 +129,17 @@ export class LocationModalComponent {
                 <div class="p-3 rounded-xl bg-amber-950/50 border border-amber-500/40 text-xs text-amber-200 leading-relaxed space-y-2">
                   <div>⚠️ ${warningMessage}</div>
                   ${
+                    status === 'denied' || status === 'unavailable'
+                      ? `<div class="text-[11px] text-slate-300 bg-slate-900/70 rounded-lg p-2 border border-white/10 space-y-1">
+                          ${
+                            isApkWebView
+                              ? `<div>📱 <strong>داخل تطبيق الأندرويد:</strong> تأكد من تفعيل زر <strong>الموقع (GPS)</strong> في الهاتف، ثم افتح <strong>الإعدادات ← التطبيقات ← أذونات التطبيق ← الموقع ← السماح أثناء الاستخدام</strong>، ثم اضغط تحديث بالأسفل.</div>`
+                              : `<div>🌐 <strong>في متصفح الهاتف/الكمبيوتر:</strong> تأكد من تفعيل <strong>الموقع (GPS)</strong> بالهاتف، واضغط أيقونة <strong>القفل / الإعدادات</strong> بجانب رابط الموقع بالأعلى ← <strong>الأذونات ← الموقع ← السماح</strong>، ثم اضغط تحديث بالأسفل.</div>`
+                          }
+                        </div>`
+                      : ''
+                  }
+                  ${
                     lastRejectedLocation && LocationService.isWithinEgypt(lastRejectedLocation.lat, lastRejectedLocation.lng)
                       ? `
                     <button id="btn-accept-rejected-loc" class="bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-200 font-bold px-3 py-1 rounded-lg text-[11px] transition-all">
@@ -133,9 +155,9 @@ export class LocationModalComponent {
 
               <!-- Primary Action Buttons -->
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                <button id="btn-loc-gps-refresh" ${this.isRefreshingGps ? 'disabled' : ''} class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-black py-2.5 px-3 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2">
+                <button id="btn-loc-gps-refresh" ${this.isRefreshingGps ? 'disabled' : ''} class="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-black py-2.5 px-3 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2 touch-manipulation">
                   <span>📡</span>
-                  <span>${this.isRefreshingGps ? 'جارٍ فحص إشارة الـ GPS...' : 'تحديث الموقع من الـ GPS'}</span>
+                  <span>${this.isRefreshingGps ? 'جارٍ فحص إشارة الـ GPS...' : 'تفعيل وتحديث الموقع من الـ GPS'}</span>
                 </button>
                 <button id="btn-loc-pick-map" class="bg-blue-600 hover:bg-blue-500 text-white font-black py-2.5 px-3 rounded-xl text-xs shadow-md transition-all flex items-center justify-center gap-2">
                   <span>👆</span>

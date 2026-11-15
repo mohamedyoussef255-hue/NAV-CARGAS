@@ -8,7 +8,6 @@ import { DEFAULT_CARGAS_LOGO_DATA_URL } from '../assets/cargasLogo';
 import { escapeHtml } from '../utils/html';
 import { normalizeArabicSearch } from '../utils/arabicSearch';
 import { getStationNavigationUrls, canLaunchNativeGeoUri } from '../utils/navigationLinks';
-import { SecretTapController } from '../utils/secretTap';
 
 export class StationListModalComponent {
   private container: HTMLElement;
@@ -17,7 +16,6 @@ export class StationListModalComponent {
   private onSelectStationCallback: (station: Station) => void;
   private onNavigateStationCallback?: (station: Station) => void;
   private onTriggerAdminCallback?: () => void;
-  private secretTapController: SecretTapController;
   private searchQuery = '';
   private selectedGov = 'all';
   private selectedCompany = 'all';
@@ -37,11 +35,6 @@ export class StationListModalComponent {
     this.onSelectStationCallback = handlers.onSelectStation;
     this.onNavigateStationCallback = handlers.onNavigateStation;
     this.onTriggerAdminCallback = handlers.onTriggerAdmin;
-    this.secretTapController = new SecretTapController({
-      requiredTaps: 5,
-      windowMs: 2500,
-      onTrigger: () => this.onTriggerAdminCallback?.(),
-    });
   }
 
   updateData(stations: Station[], userLocation: UserLocation): void {
@@ -67,7 +60,6 @@ export class StationListModalComponent {
   }
 
   hide(): void {
-    this.secretTapController.reset();
     this.container.classList.add('hidden');
     this.container.innerHTML = '';
   }
@@ -202,7 +194,7 @@ export class StationListModalComponent {
             </div>
 
             <!-- Filter Row: Gov & Services -->
-            <div class="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
+            <div class="flex items-center gap-2 flex-wrap pb-1 text-xs">
               
               <!-- Governorate Selector -->
               <select 
@@ -229,7 +221,7 @@ export class StationListModalComponent {
               }
 
               <!-- Service Filter Chips -->
-              <div class="flex items-center gap-1.5 shrink-0">
+              <div class="flex items-center gap-1.5 flex-wrap">
                 <button data-service="all" class="filter-chip ${this.selectedService === 'all' ? 'active' : ''} px-3 py-1.5 rounded-xl border text-xs font-bold transition-all">
                   الكل
                 </button>
@@ -248,7 +240,7 @@ export class StationListModalComponent {
                 <button
                   type="button"
                   id="btn-secret-list-settings"
-                  class="filter-chip px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center touch-manipulation select-none"
+                  class="filter-chip px-2.5 py-1.5 min-w-[36px] min-h-[32px] rounded-xl border text-xs font-bold transition-all flex items-center justify-center touch-manipulation select-none cursor-pointer active:scale-95"
                 >
                   <svg class="w-4 h-4 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <circle cx="12" cy="12" r="3"/>
@@ -448,7 +440,50 @@ export class StationListModalComponent {
 
     if (this.onTriggerAdminCallback) {
       const secretSettingsBtn = this.container.querySelector('#btn-secret-list-settings') as HTMLElement | null;
-      this.secretTapController.bind(secretSettingsBtn);
+      if (secretSettingsBtn) {
+        let lastActivatedAt = 0;
+        let touchStartPos: { x: number; y: number } | null = null;
+        const triggerSingleTapAdmin = (e: Event) => {
+          const now = performance.now();
+          if (now - lastActivatedAt < 450) return;
+          lastActivatedAt = now;
+          e.stopPropagation();
+          try {
+            SoundService.playChime('start');
+          } catch {
+            // ignore WebAudio errors in WebView
+          }
+          this.onTriggerAdminCallback?.();
+          const pwdInput = document.getElementById('admin-password-input') as HTMLInputElement | null;
+          pwdInput?.focus();
+        };
+
+        secretSettingsBtn.addEventListener(
+          'touchstart',
+          (e) => {
+            if (e.touches.length === 1) {
+              touchStartPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+          },
+          { passive: true }
+        );
+        secretSettingsBtn.addEventListener(
+          'touchend',
+          (e) => {
+            const t = e.changedTouches[0];
+            if (touchStartPos && t) {
+              const dist = Math.hypot(t.clientX - touchStartPos.x, t.clientY - touchStartPos.y);
+              touchStartPos = null;
+              if (dist > 48) return;
+            }
+            triggerSingleTapAdmin(e);
+          },
+          { passive: true }
+        );
+        secretSettingsBtn.addEventListener('click', (e) => {
+          triggerSingleTapAdmin(e);
+        });
+      }
     }
 
     this.container.querySelectorAll('[data-station-action="geo"]').forEach((link) => {

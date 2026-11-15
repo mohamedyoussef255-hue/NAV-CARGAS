@@ -126,8 +126,11 @@
 }
 
 #admin-modal-container {
-  position: relative;
-  z-index: 9999;
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 2147483000 !important;
 }
 
 .brand-title {

@@ -10,7 +10,7 @@ export class ToastService {
         top: 20px;
         left: 50%;
         transform: translateX(-50%);
-        z-index: 999999;
+        z-index: 2147483647;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -101,7 +101,7 @@ export class ToastService {
       background: rgba(0, 0, 0, 0.75);
       backdrop-filter: blur(6px);
       -webkit-backdrop-filter: blur(6px);
-      z-index: 9999999;
+      z-index: 2147483646;
       display: flex;
       align-items: center;
       justify-content: center;

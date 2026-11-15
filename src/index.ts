@@ -311,7 +311,7 @@ class CargasApp {
           if (adminEl && !adminEl.classList.contains('hidden')) {
             this.listModal.hide();
           }
-        }, 750);
+        }, 150);
       },
     });
 
@@ -534,6 +534,8 @@ class CargasApp {
     // Separate updates for App Logo (Header), Station Logo (Map Pins), and Per-Company Logos
     StationStorage.onAppLogoUpdated((appLogo) => {
       this.header.updateLogo(headerContainer, appLogo);
+      const splashAppImg = document.getElementById('splash-app-logo-img') as HTMLImageElement | null;
+      if (splashAppImg && appLogo) splashAppImg.src = appLogo;
     });
 
     StationStorage.onStationLogoUpdated((stationLogo) => {

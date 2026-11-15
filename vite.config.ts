@@ -101,7 +101,7 @@ export default defineConfig({
         skipWaiting: true,
         navigateFallback: 'index.html',
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,json}'],
-        maximumFileSizeToCacheInBytes: 12 * 1024 * 1024,
+        maximumFileSizeToCacheInBytes: 25 * 1024 * 1024,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/([abc]\.)?tile\.openstreetmap\.org\/.*/i,
@@ -295,7 +295,7 @@ export default defineConfig({
             return;
           }
 
-          // POST /api/save-logo: writes custom logo atomically to src/assets/cargasLogo.ts
+          // POST /api/save-logo: writes custom logos & active app slot atomically to src/assets/cargasLogo.ts
           if (req.url === '/api/save-logo' && req.method === 'POST') {
             void readJsonBody(req)
               .then((parsed) =>
@@ -303,7 +303,7 @@ export default defineConfig({
                   const logoDataUrl = parsed?.logoDataUrl;
                   const logoType = parsed?.type || 'all';
 
-                  if (typeof logoDataUrl !== 'string') {
+                  if (logoType !== 'app-slots' && typeof logoDataUrl !== 'string') {
                     res.statusCode = 400;
                     res.setHeader('Content-Type', 'application/json; charset=utf-8');
                     res.end(JSON.stringify({ success: false, error: 'بيانات الشعار غير صالحة' }));
@@ -316,37 +316,96 @@ export default defineConfig({
                   let headerPart = fnBoundary !== -1 ? existingContent.slice(0, fnBoundary) : existingContent;
                   const footerPart = fnBoundary !== -1 ? existingContent.slice(fnBoundary) : '';
 
-                  if (logoType === 'app' || logoType === 'all') {
-                    const appReplacement = logoDataUrl
-                      ? `export const BAKED_APP_LOGO: string = ${JSON.stringify(logoDataUrl)};`
-                      : `export const BAKED_APP_LOGO: string = DEFAULT_CARGAS_LOGO_DATA_URL;`;
+                  const upsertConstLine = (
+                    pattern: RegExp,
+                    replacementLine: string,
+                    fallbackAnchorPattern?: RegExp
+                  ) => {
+                    if (pattern.test(headerPart)) {
+                      headerPart = headerPart.replace(pattern, () => replacementLine);
+                    } else if (fallbackAnchorPattern && fallbackAnchorPattern.test(headerPart)) {
+                      headerPart = headerPart.replace(
+                        fallbackAnchorPattern,
+                        (match) => `${match}\n\n${replacementLine}`
+                      );
+                    } else {
+                      headerPart = `${headerPart.trimEnd()}\n\n${replacementLine}\n`;
+                    }
+                  };
+
+                  if (logoType === 'app-slots') {
+                    const appLogo1 =
+                      typeof parsed?.appLogo1 === 'string' ? parsed.appLogo1 : '';
+                    const appLogo2 =
+                      typeof parsed?.appLogo2 === 'string' ? parsed.appLogo2 : '';
+                    const activeSlot: 1 | 2 =
+                      Number(parsed?.activeAppSlot) === 2 && Boolean(appLogo2) ? 2 : 1;
+
                     const appPattern = /^export const BAKED_APP_LOGO:\s*string\s*=[^\r\n]*$/m;
                     if (!appPattern.test(headerPart)) {
                       throw new Error('تعذر العثور على تعريف BAKED_APP_LOGO في الملف');
                     }
-                    headerPart = headerPart.replace(appPattern, () => appReplacement);
-                  }
+                    const app1Replacement = appLogo1
+                      ? `export const BAKED_APP_LOGO: string = ${JSON.stringify(appLogo1)};`
+                      : `export const BAKED_APP_LOGO: string = DEFAULT_CARGAS_LOGO_DATA_URL;`;
+                    headerPart = headerPart.replace(appPattern, () => app1Replacement);
 
-                  if (logoType === 'station' || logoType === 'all') {
-                    const stationReplacement = logoDataUrl
-                      ? `export const BAKED_STATION_LOGO: string = ${JSON.stringify(logoDataUrl)};`
-                      : `export const BAKED_STATION_LOGO: string = DEFAULT_CARGAS_LOGO_DATA_URL;`;
-                    const stationPattern = /^export const BAKED_STATION_LOGO:\s*string\s*=[^\r\n]*$/m;
-                    if (!stationPattern.test(headerPart)) {
-                      throw new Error('تعذر العثور على تعريف BAKED_STATION_LOGO في الملف');
+                    upsertConstLine(
+                      /^export const BAKED_APP_LOGO_ALT:\s*string\s*=[^\r\n]*$/m,
+                      `export const BAKED_APP_LOGO_ALT: string = ${JSON.stringify(appLogo2)};`,
+                      /^export const BAKED_APP_LOGO:\s*string\s*=[^\r\n]*$/m
+                    );
+
+                    upsertConstLine(
+                      /^export const BAKED_ACTIVE_APP_LOGO_SLOT:\s*(?:1\s*\|\s*2|number)\s*=[^\r\n]*$/m,
+                      `export const BAKED_ACTIVE_APP_LOGO_SLOT: 1 | 2 = ${activeSlot};`,
+                      /^export const BAKED_APP_LOGO_ALT:\s*string\s*=[^\r\n]*$/m
+                    );
+                  } else {
+                    if (logoType === 'app' || logoType === 'all') {
+                      const appReplacement = logoDataUrl
+                        ? `export const BAKED_APP_LOGO: string = ${JSON.stringify(logoDataUrl)};`
+                        : `export const BAKED_APP_LOGO: string = DEFAULT_CARGAS_LOGO_DATA_URL;`;
+                      const appPattern = /^export const BAKED_APP_LOGO:\s*string\s*=[^\r\n]*$/m;
+                      if (!appPattern.test(headerPart)) {
+                        throw new Error('تعذر العثور على تعريف BAKED_APP_LOGO في الملف');
+                      }
+                      headerPart = headerPart.replace(appPattern, () => appReplacement);
                     }
-                    headerPart = headerPart.replace(stationPattern, () => stationReplacement);
+
+                    if (logoType === 'app-alt') {
+                      upsertConstLine(
+                        /^export const BAKED_APP_LOGO_ALT:\s*string\s*=[^\r\n]*$/m,
+                        `export const BAKED_APP_LOGO_ALT: string = ${JSON.stringify(logoDataUrl || '')};`,
+                        /^export const BAKED_APP_LOGO:\s*string\s*=[^\r\n]*$/m
+                      );
+                    }
+
+                    if (logoType === 'station' || logoType === 'all') {
+                      const stationReplacement = logoDataUrl
+                        ? `export const BAKED_STATION_LOGO: string = ${JSON.stringify(logoDataUrl)};`
+                        : `export const BAKED_STATION_LOGO: string = DEFAULT_CARGAS_LOGO_DATA_URL;`;
+                      const stationPattern = /^export const BAKED_STATION_LOGO:\s*string\s*=[^\r\n]*$/m;
+                      if (!stationPattern.test(headerPart)) {
+                        throw new Error('تعذر العثور على تعريف BAKED_STATION_LOGO في الملف');
+                      }
+                      headerPart = headerPart.replace(stationPattern, () => stationReplacement);
+                    }
                   }
 
                   const nextContent = headerPart + footerPart;
                   const changed = atomicWriteIfChanged(targetFile, nextContent);
 
                   const typeLabel =
-                    logoType === 'app'
-                      ? 'شعار التطبيق'
-                      : logoType === 'station'
-                        ? 'شعار دبابيس المحطات'
-                        : 'الشعار';
+                    logoType === 'app-slots'
+                      ? 'شعاري التطبيق والاختيار المفعّل'
+                      : logoType === 'app'
+                        ? 'شعار التطبيق'
+                        : logoType === 'app-alt'
+                          ? 'شعار التطبيق البديل'
+                          : logoType === 'station'
+                            ? 'شعار دبابيس المحطات'
+                            : 'الشعار';
                   res.statusCode = 200;
                   res.setHeader('Content-Type', 'application/json; charset=utf-8');
                   res.end(

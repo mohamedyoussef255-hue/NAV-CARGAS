@@ -8,6 +8,8 @@ import {
 import { StationDb } from './stationDb';
 import {
   BAKED_APP_LOGO,
+  BAKED_APP_LOGO_ALT,
+  BAKED_ACTIVE_APP_LOGO_SLOT,
   BAKED_STATION_LOGO,
   DEFAULT_CARGAS_LOGO_DATA_URL,
   generateLogoSourceCode,
@@ -22,6 +24,11 @@ const STORAGE_KEY_STATIONS_UPDATED_AT = 'cargas_stations_updated_at_v1';
 const STORAGE_KEY_BUNDLED_SIG = 'cargas_bundled_sig_v1';
 const STORAGE_KEY_USER_MODIFIED = 'cargas_stations_user_modified_v1';
 const STORAGE_KEY_APP_LOGO = 'cargas_app_logo_v2';
+const STORAGE_KEY_APP_LOGO_1 = 'cargas_app_logo_slot1_v1';
+const STORAGE_KEY_APP_LOGO_2 = 'cargas_app_logo_slot2_v1';
+const STORAGE_KEY_ACTIVE_APP_LOGO_SLOT = 'cargas_active_app_logo_slot_v1';
+const STORAGE_KEY_BAKED_APP_LOGOS_SIG = 'cargas_baked_app_logos_sig_v1';
+const STORAGE_KEY_APP_LOGOS_USER_MODIFIED = 'cargas_app_logos_user_modified_v1';
 const STORAGE_KEY_STATION_LOGO = 'cargas_station_logo_v2';
 const STORAGE_KEY_COMPANY_LOGOS = 'cargas_company_logos_v1';
 const STORAGE_KEY_BAKED_COMPANY_LOGOS_SIG = 'cargas_baked_company_logos_sig_v1';
@@ -34,10 +41,18 @@ const META_KEY_UPDATED_AT = 'stations_updated_at_v1';
 const META_KEY_BUNDLED_SIG = 'bundled_sig_v1';
 const META_KEY_USER_MODIFIED = 'stations_user_modified_v1';
 const META_KEY_APP_LOGO = 'app_logo_v2';
+const META_KEY_APP_LOGO_1 = 'app_logo_slot1_v1';
+const META_KEY_APP_LOGO_2 = 'app_logo_slot2_v1';
+const META_KEY_ACTIVE_APP_LOGO_SLOT = 'active_app_logo_slot_v1';
+const META_KEY_BAKED_APP_LOGOS_SIG = 'baked_app_logos_sig_v1';
+const META_KEY_APP_LOGOS_USER_MODIFIED = 'app_logos_user_modified_v1';
 const META_KEY_STATION_LOGO = 'station_logo_v2';
 const META_KEY_COMPANY_LOGOS = 'company_logos_v1';
 const META_KEY_BAKED_COMPANY_LOGOS_SIG = 'baked_company_logos_sig_v1';
 const META_KEY_COMPANY_LOGOS_USER_MODIFIED = 'company_logos_user_modified_v1';
+
+const BAKED_SLOT_1_SENTINEL = '__BAKED_APP_LOGO_1__';
+const BAKED_SLOT_2_SENTINEL = '__BAKED_APP_LOGO_2__';
 
 const STATIONS_UPDATED_EVENT = 'cargas:stations:updated';
 const THEME_CHANGED_EVENT = 'cargas:theme:changed';
@@ -59,6 +74,66 @@ function computeCompanyLogosSignature(logos: Record<string, string>): string {
   const keys = Object.keys(logos).sort();
   if (keys.length === 0) return '0';
   return keys.map((k) => `${k}:${logos[k]?.length || 0}:${logos[k]?.slice(0, 32) || ''}`).join('|');
+}
+
+function computeAppLogosSignature(logo1: string, logo2: string, activeSlot: 1 | 2): string {
+  const sig1 = `${logo1?.length || 0}:${logo1?.slice(0, 32) || ''}:${logo1?.slice(-24) || ''}`;
+  const sig2 = `${logo2?.length || 0}:${logo2?.slice(0, 32) || ''}:${logo2?.slice(-24) || ''}`;
+  return `${activeSlot}|${sig1}|${sig2}`;
+}
+
+function safeLocalStorageGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function decodeAppSlotFromLocalStorage(
+  raw: string | null,
+  bakedVal: string,
+  sentinel: string
+): string | null {
+  if (raw === null) return null;
+  if (raw === sentinel) return bakedVal;
+  return raw;
+}
+
+function writeAppSlotsToLocalStorage(
+  logo1: string,
+  logo2: string,
+  activeSlot: 1 | 2,
+  bakedSig: string,
+  userModified?: boolean
+): void {
+  try {
+    const val1 = logo1 && logo1 === BAKED_APP_LOGO ? BAKED_SLOT_1_SENTINEL : logo1;
+    const val2 = logo2 && logo2 === BAKED_APP_LOGO_ALT ? BAKED_SLOT_2_SENTINEL : logo2;
+    const activeVal = activeSlot === 2 && logo2 ? val2 : val1;
+    localStorage.setItem(STORAGE_KEY_ACTIVE_APP_LOGO_SLOT, String(activeSlot));
+    localStorage.setItem(STORAGE_KEY_BAKED_APP_LOGOS_SIG, bakedSig);
+    if (typeof userModified === 'boolean') {
+      localStorage.setItem(STORAGE_KEY_APP_LOGOS_USER_MODIFIED, userModified ? 'true' : 'false');
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY_APP_LOGO_1, val1);
+    } catch {
+      // IndexedDB preserves oversized custom images safely
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY_APP_LOGO_2, val2);
+    } catch {
+      // ignore quota
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY_APP_LOGO, activeVal);
+    } catch {
+      // ignore quota
+    }
+  } catch {
+    // ignore
+  }
 }
 
 function sanitizeCompanyLogosMap(raw: unknown): Record<string, string> {
@@ -97,6 +172,9 @@ function computeStationsSignature(list: Station[]): string {
 export class StationStorage {
   private static memoryStations: Station[] | null = null;
   private static memoryAppLogo: string | null = null;
+  private static memoryAppLogo1: string | null = null;
+  private static memoryAppLogo2: string | null = null;
+  private static memoryActiveAppLogoSlot: 1 | 2 | null = null;
   private static memoryStationLogo: string | null = null;
   private static memoryCompanyLogos: Record<string, string> | null = null;
   private static idbWriteQueue: Promise<unknown> = Promise.resolve();
@@ -244,24 +322,64 @@ export class StationStorage {
 
       const hasUserModifications = Boolean(idbUserModified || lsUserModified);
 
-      // Always ensure bundled/active app, station & per-company logos are seeded and preserved in IndexedDB + LocalStorage
+      // Always ensure bundled/active app logos (Slot 1 & Slot 2 + active choice), station & per-company logos are seeded and preserved in IndexedDB + LocalStorage
       const bakedCompanyLogos = sanitizeCompanyLogosMap(BAKED_COMPANY_LOGOS);
       const bakedCompanyLogosSig = computeCompanyLogosSignature(bakedCompanyLogos);
-      const [idbAppLogo, idbStationLogo, idbCompanyLogos, idbCompanySig, idbCompanyModified] =
-        await Promise.all([
-          StationDb.getMeta<string>(META_KEY_APP_LOGO),
-          StationDb.getMeta<string>(META_KEY_STATION_LOGO),
-          StationDb.getMeta<Record<string, string>>(META_KEY_COMPANY_LOGOS),
-          StationDb.getMeta<string>(META_KEY_BAKED_COMPANY_LOGOS_SIG),
-          StationDb.getMeta<boolean>(META_KEY_COMPANY_LOGOS_USER_MODIFIED),
-        ]);
-      let lsAppLogo: string | null = null;
+      const bakedLogo1 = BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+      const bakedLogo2 = BAKED_APP_LOGO_ALT || '';
+      const bakedActiveSlot: 1 | 2 = BAKED_ACTIVE_APP_LOGO_SLOT === 2 && bakedLogo2 ? 2 : 1;
+      const bakedAppLogosSig = computeAppLogosSignature(bakedLogo1, bakedLogo2, bakedActiveSlot);
+
+      const [
+        idbAppLogo,
+        idbAppLogo1,
+        idbAppLogo2,
+        idbActiveSlotRaw,
+        idbAppLogosSig,
+        idbAppLogosModified,
+        idbStationLogo,
+        idbCompanyLogos,
+        idbCompanySig,
+        idbCompanyModified,
+      ] = await Promise.all([
+        StationDb.getMeta<string>(META_KEY_APP_LOGO),
+        StationDb.getMeta<string>(META_KEY_APP_LOGO_1),
+        StationDb.getMeta<string>(META_KEY_APP_LOGO_2),
+        StationDb.getMeta<number>(META_KEY_ACTIVE_APP_LOGO_SLOT),
+        StationDb.getMeta<string>(META_KEY_BAKED_APP_LOGOS_SIG),
+        StationDb.getMeta<boolean>(META_KEY_APP_LOGOS_USER_MODIFIED),
+        StationDb.getMeta<string>(META_KEY_STATION_LOGO),
+        StationDb.getMeta<Record<string, string>>(META_KEY_COMPANY_LOGOS),
+        StationDb.getMeta<string>(META_KEY_BAKED_COMPANY_LOGOS_SIG),
+        StationDb.getMeta<boolean>(META_KEY_COMPANY_LOGOS_USER_MODIFIED),
+      ]);
+
+      const lsAppLogo = decodeAppSlotFromLocalStorage(
+        safeLocalStorageGet(STORAGE_KEY_APP_LOGO),
+        BAKED_APP_LOGO,
+        BAKED_SLOT_1_SENTINEL
+      );
+      const lsAppLogo1 = decodeAppSlotFromLocalStorage(
+        safeLocalStorageGet(STORAGE_KEY_APP_LOGO_1),
+        BAKED_APP_LOGO,
+        BAKED_SLOT_1_SENTINEL
+      );
+      const lsAppLogo2 = decodeAppSlotFromLocalStorage(
+        safeLocalStorageGet(STORAGE_KEY_APP_LOGO_2),
+        BAKED_APP_LOGO_ALT,
+        BAKED_SLOT_2_SENTINEL
+      );
+      const lsActiveSlotRaw = safeLocalStorageGet(STORAGE_KEY_ACTIVE_APP_LOGO_SLOT);
+      const lsActiveSlot: 1 | 2 | null =
+        lsActiveSlotRaw === '2' ? 2 : lsActiveSlotRaw === '1' ? 1 : null;
+      const lsAppLogosSig = safeLocalStorageGet(STORAGE_KEY_BAKED_APP_LOGOS_SIG);
+      const lsAppLogosModified = safeLocalStorageGet(STORAGE_KEY_APP_LOGOS_USER_MODIFIED) === 'true';
+
       let lsStationLogo: string | null = null;
       let lsCompanyLogos: Record<string, string> | null = null;
       let lsCompanySig: string | null = null;
       let lsCompanyModified = false;
       try {
-        lsAppLogo = localStorage.getItem(STORAGE_KEY_APP_LOGO);
         lsStationLogo = localStorage.getItem(STORAGE_KEY_STATION_LOGO);
         lsCompanySig = localStorage.getItem(STORAGE_KEY_BAKED_COMPANY_LOGOS_SIG);
         lsCompanyModified = localStorage.getItem(STORAGE_KEY_COMPANY_LOGOS_USER_MODIFIED) === 'true';
@@ -273,12 +391,69 @@ export class StationStorage {
         // ignore
       }
 
-      const resolvedAppLogo =
-        lsAppLogo || idbAppLogo || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+      const hasAppLogoModifications = Boolean(idbAppLogosModified || lsAppLogosModified);
+      const storedAppLogosSig = idbAppLogosSig || lsAppLogosSig;
+      let resolvedLogo1: string;
+      let resolvedLogo2: string;
+      let resolvedActiveSlot: 1 | 2;
+
+      if (!isDev && !hasAppLogoModifications && storedAppLogosSig && storedAppLogosSig !== bakedAppLogosSig) {
+        resolvedLogo1 = bakedLogo1;
+        resolvedLogo2 = bakedLogo2;
+        resolvedActiveSlot = bakedActiveSlot;
+      } else {
+        resolvedLogo1 = lsAppLogo1 || idbAppLogo1 || lsAppLogo || idbAppLogo || bakedLogo1;
+        resolvedLogo2 =
+          lsAppLogo2 !== null
+            ? lsAppLogo2
+            : idbAppLogo2 !== undefined && idbAppLogo2 !== null
+              ? idbAppLogo2
+              : bakedLogo2;
+        if (!isDev && !hasAppLogoModifications && !resolvedLogo2 && bakedLogo2) {
+          resolvedLogo2 = bakedLogo2;
+        }
+        const preferredSlot =
+          lsActiveSlot ??
+          (idbActiveSlotRaw === 2 ? 2 : idbActiveSlotRaw === 1 ? 1 : bakedActiveSlot);
+        resolvedActiveSlot = preferredSlot === 2 && resolvedLogo2 ? 2 : 1;
+      }
+
+      const resolvedAppLogo = resolvedActiveSlot === 2 && resolvedLogo2 ? resolvedLogo2 : resolvedLogo1;
       const resolvedStationLogo =
         lsStationLogo || idbStationLogo || BAKED_STATION_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+
+      this.memoryAppLogo1 = resolvedLogo1;
+      this.memoryAppLogo2 = resolvedLogo2;
+      this.memoryActiveAppLogoSlot = resolvedActiveSlot;
       this.memoryAppLogo = resolvedAppLogo;
       this.memoryStationLogo = resolvedStationLogo;
+
+      writeAppSlotsToLocalStorage(
+        resolvedLogo1,
+        resolvedLogo2,
+        resolvedActiveSlot,
+        bakedAppLogosSig,
+        hasAppLogoModifications
+      );
+
+      this.enqueueIdbWrite(async () => {
+        await StationDb.setMeta(META_KEY_APP_LOGO_1, resolvedLogo1);
+        await StationDb.setMeta(META_KEY_APP_LOGO_2, resolvedLogo2);
+        await StationDb.setMeta(META_KEY_ACTIVE_APP_LOGO_SLOT, resolvedActiveSlot);
+        await StationDb.setMeta(META_KEY_BAKED_APP_LOGOS_SIG, bakedAppLogosSig);
+        await StationDb.setMeta(META_KEY_APP_LOGOS_USER_MODIFIED, hasAppLogoModifications);
+        await StationDb.setMeta(META_KEY_APP_LOGO, resolvedAppLogo);
+      });
+
+      if (
+        isDev &&
+        (typeof navigator === 'undefined' || navigator.onLine) &&
+        computeAppLogosSignature(resolvedLogo1, resolvedLogo2, resolvedActiveSlot) !== bakedAppLogosSig
+      ) {
+        void this.saveAppLogosToSourceCode(resolvedLogo1, resolvedLogo2, resolvedActiveSlot);
+      }
+
+      dispatchSafe(APP_LOGO_CHANGED_EVENT, resolvedAppLogo);
 
       const hasCompanyLogoModifications = Boolean(idbCompanyModified || lsCompanyModified);
       const storedCompanySig = idbCompanySig || lsCompanySig;
@@ -309,11 +484,6 @@ export class StationStorage {
       }
       dispatchSafe(COMPANY_LOGOS_CHANGED_EVENT, resolvedCompanyLogos);
 
-      if (!idbAppLogo || idbAppLogo !== resolvedAppLogo) {
-        this.enqueueIdbWrite(async () => {
-          await StationDb.setMeta(META_KEY_APP_LOGO, resolvedAppLogo);
-        });
-      }
       if (!idbStationLogo || idbStationLogo !== resolvedStationLogo) {
         this.enqueueIdbWrite(async () => {
           await StationDb.setMeta(META_KEY_STATION_LOGO, resolvedStationLogo);
@@ -374,10 +544,6 @@ export class StationStorage {
           await this.saveStationsToSourceCode(loaded);
         }
         try {
-          const customAppLogo = localStorage.getItem(STORAGE_KEY_APP_LOGO);
-          if (customAppLogo && customAppLogo !== BAKED_APP_LOGO) {
-            await this.saveLogoToSourceCode(customAppLogo, 'app');
-          }
           const customStationLogo = localStorage.getItem(STORAGE_KEY_STATION_LOGO);
           if (customStationLogo && customStationLogo !== BAKED_STATION_LOGO) {
             await this.saveLogoToSourceCode(customStationLogo, 'station');
@@ -593,7 +759,10 @@ export class StationStorage {
   }
 
   // Directly writes custom logo into the source code file (src/assets/cargasLogo.ts) via API
-  static saveLogoToSourceCode(logoDataUrl: string, type: 'app' | 'station' = 'app'): Promise<{ success: boolean; message: string }> {
+  static saveLogoToSourceCode(
+    logoDataUrl: string,
+    type: 'app' | 'app-alt' | 'station' = 'app'
+  ): Promise<{ success: boolean; message: string }> {
     return this.enqueueSourceWrite(async () => {
       try {
         const response = await fetch('/api/save-logo', {
@@ -614,6 +783,64 @@ export class StationStorage {
         return {
           success: false,
           message: e.message || 'تعذر حفظ الشعار في الكود المصدري',
+        };
+      }
+    });
+  }
+
+  // Directly writes BOTH app logos + active slot choice into src/assets/cargasLogo.ts via API
+  static saveAppLogosToSourceCode(
+    logo1?: string,
+    logo2?: string,
+    activeSlot?: 1 | 2
+  ): Promise<{ success: boolean; message: string }> {
+    const slots = this.getAppLogoSlots();
+    const finalLogo1 = typeof logo1 === 'string' ? logo1 : slots.logo1;
+    const finalLogo2 = typeof logo2 === 'string' ? logo2 : slots.logo2;
+    const finalActiveSlot: 1 | 2 =
+      (activeSlot ?? slots.activeSlot) === 2 && Boolean(finalLogo2) ? 2 : 1;
+
+    return this.enqueueSourceWrite(async () => {
+      try {
+        const response = await fetch('/api/save-logo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'app-slots',
+            appLogo1: finalLogo1 === DEFAULT_CARGAS_LOGO_DATA_URL ? '' : finalLogo1,
+            appLogo2: finalLogo2,
+            activeAppSlot: finalActiveSlot,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        const sig = computeAppLogosSignature(
+          finalLogo1 || DEFAULT_CARGAS_LOGO_DATA_URL,
+          finalLogo2,
+          finalActiveSlot
+        );
+        try {
+          localStorage.setItem(STORAGE_KEY_APP_LOGOS_USER_MODIFIED, 'false');
+          localStorage.setItem(STORAGE_KEY_BAKED_APP_LOGOS_SIG, sig);
+        } catch {
+          // ignore
+        }
+        this.enqueueIdbWrite(async () => {
+          await StationDb.setMeta(META_KEY_APP_LOGOS_USER_MODIFIED, false);
+          await StationDb.setMeta(META_KEY_BAKED_APP_LOGOS_SIG, sig);
+        });
+        return {
+          success: true,
+          message:
+            data.message || 'تم حفظ وتثبيت شعاري التطبيق والاختيار المفعّل في الكود المصدري بنجاح!',
+        };
+      } catch (e: any) {
+        console.warn('Direct dual app logos save via API failed:', e);
+        return {
+          success: false,
+          message: e?.message || 'تعذر حفظ شعاري التطبيق في الكود المصدري',
         };
       }
     });
@@ -671,44 +898,156 @@ export class StationStorage {
   }
 
   // ==========================================
-  // 1. App Logo Handling (Header & UI)
+  // 1. App Logo Handling (Header & Splash — Dual Selectable Slots)
   // ==========================================
+  static getAppLogoSlots(): { logo1: string; logo2: string; activeSlot: 1 | 2 } {
+    const lsLogo1 = decodeAppSlotFromLocalStorage(
+      safeLocalStorageGet(STORAGE_KEY_APP_LOGO_1),
+      BAKED_APP_LOGO,
+      BAKED_SLOT_1_SENTINEL
+    );
+    const lsLegacy = decodeAppSlotFromLocalStorage(
+      safeLocalStorageGet(STORAGE_KEY_APP_LOGO),
+      BAKED_APP_LOGO,
+      BAKED_SLOT_1_SENTINEL
+    );
+    const logo1 =
+      this.memoryAppLogo1 ||
+      lsLogo1 ||
+      lsLegacy ||
+      BAKED_APP_LOGO ||
+      DEFAULT_CARGAS_LOGO_DATA_URL;
+
+    const lsLogo2 = decodeAppSlotFromLocalStorage(
+      safeLocalStorageGet(STORAGE_KEY_APP_LOGO_2),
+      BAKED_APP_LOGO_ALT,
+      BAKED_SLOT_2_SENTINEL
+    );
+    const logo2 =
+      this.memoryAppLogo2 !== null
+        ? this.memoryAppLogo2
+        : lsLogo2 ?? (BAKED_APP_LOGO_ALT || '');
+
+    const lsSlotRaw = safeLocalStorageGet(STORAGE_KEY_ACTIVE_APP_LOGO_SLOT);
+    const preferredSlot: 1 | 2 =
+      this.memoryActiveAppLogoSlot ??
+      (lsSlotRaw === '2' ? 2 : lsSlotRaw === '1' ? 1 : BAKED_ACTIVE_APP_LOGO_SLOT);
+    const activeSlot: 1 | 2 = preferredSlot === 2 && Boolean(logo2) ? 2 : 1;
+
+    return { logo1, logo2, activeSlot };
+  }
+
   static getAppLogo(): string {
+    const { logo1, logo2, activeSlot } = this.getAppLogoSlots();
+    if (activeSlot === 2 && logo2) return logo2;
     if (this.memoryAppLogo) return this.memoryAppLogo;
+    return logo1 || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+  }
+
+  static saveAppLogoSlot(
+    slot: 1 | 2,
+    logoDataUrl: string | null,
+    options?: { activate?: boolean; skipSourceSync?: boolean }
+  ): void {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY_APP_LOGO);
-      if (stored) return stored;
-    } catch {
-      // ignore
+      const current = this.getAppLogoSlots();
+      let nextLogo1 = current.logo1 || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+      let nextLogo2 = current.logo2 || '';
+      let nextActiveSlot: 1 | 2 = current.activeSlot;
+
+      if (slot === 1) {
+        nextLogo1 = logoDataUrl ? logoDataUrl : DEFAULT_CARGAS_LOGO_DATA_URL;
+        if (options?.activate !== false) {
+          nextActiveSlot = 1;
+        }
+      } else {
+        nextLogo2 = logoDataUrl ? logoDataUrl : '';
+        if (!nextLogo2) {
+          nextActiveSlot = 1;
+        } else if (options?.activate !== false) {
+          nextActiveSlot = 2;
+        }
+      }
+
+      const activeLogo = nextActiveSlot === 2 && nextLogo2 ? nextLogo2 : nextLogo1;
+      const bakedSig = computeAppLogosSignature(
+        BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL,
+        BAKED_APP_LOGO_ALT || '',
+        BAKED_ACTIVE_APP_LOGO_SLOT === 2 && BAKED_APP_LOGO_ALT ? 2 : 1
+      );
+
+      this.memoryAppLogo1 = nextLogo1;
+      this.memoryAppLogo2 = nextLogo2;
+      this.memoryActiveAppLogoSlot = nextActiveSlot;
+      this.memoryAppLogo = activeLogo;
+
+      writeAppSlotsToLocalStorage(nextLogo1, nextLogo2, nextActiveSlot, bakedSig, true);
+
+      this.enqueueIdbWrite(async () => {
+        await StationDb.setMeta(META_KEY_APP_LOGO_1, nextLogo1);
+        await StationDb.setMeta(META_KEY_APP_LOGO_2, nextLogo2);
+        await StationDb.setMeta(META_KEY_ACTIVE_APP_LOGO_SLOT, nextActiveSlot);
+        await StationDb.setMeta(META_KEY_BAKED_APP_LOGOS_SIG, bakedSig);
+        await StationDb.setMeta(META_KEY_APP_LOGOS_USER_MODIFIED, true);
+        await StationDb.setMeta(META_KEY_APP_LOGO, activeLogo);
+      });
+
+      if (isDevEnvironment() && !options?.skipSourceSync) {
+        void this.saveAppLogosToSourceCode(nextLogo1, nextLogo2, nextActiveSlot);
+      }
+
+      dispatchSafe(APP_LOGO_CHANGED_EVENT, activeLogo);
+    } catch (e) {
+      console.error('Failed to save app logo slot', e);
     }
-    return BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
+  }
+
+  static setActiveAppLogoSlot(
+    slot: 1 | 2,
+    options?: { skipSourceSync?: boolean }
+  ): void {
+    try {
+      const current = this.getAppLogoSlots();
+      const nextActiveSlot: 1 | 2 = slot === 2 && Boolean(current.logo2) ? 2 : 1;
+      const activeLogo = nextActiveSlot === 2 && current.logo2 ? current.logo2 : current.logo1;
+      const bakedSig = computeAppLogosSignature(
+        BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL,
+        BAKED_APP_LOGO_ALT || '',
+        BAKED_ACTIVE_APP_LOGO_SLOT === 2 && BAKED_APP_LOGO_ALT ? 2 : 1
+      );
+
+      this.memoryAppLogo1 = current.logo1;
+      this.memoryAppLogo2 = current.logo2;
+      this.memoryActiveAppLogoSlot = nextActiveSlot;
+      this.memoryAppLogo = activeLogo;
+
+      writeAppSlotsToLocalStorage(
+        current.logo1,
+        current.logo2,
+        nextActiveSlot,
+        bakedSig,
+        true
+      );
+
+      this.enqueueIdbWrite(async () => {
+        await StationDb.setMeta(META_KEY_ACTIVE_APP_LOGO_SLOT, nextActiveSlot);
+        await StationDb.setMeta(META_KEY_BAKED_APP_LOGOS_SIG, bakedSig);
+        await StationDb.setMeta(META_KEY_APP_LOGOS_USER_MODIFIED, true);
+        await StationDb.setMeta(META_KEY_APP_LOGO, activeLogo);
+      });
+
+      if (isDevEnvironment() && !options?.skipSourceSync) {
+        void this.saveAppLogosToSourceCode(current.logo1, current.logo2, nextActiveSlot);
+      }
+
+      dispatchSafe(APP_LOGO_CHANGED_EVENT, activeLogo);
+    } catch (e) {
+      console.error('Failed to switch active app logo slot', e);
+    }
   }
 
   static saveAppLogo(logoDataUrl: string | null, options?: { skipSourceSync?: boolean }): void {
-    try {
-      const nextVal = logoDataUrl || BAKED_APP_LOGO || DEFAULT_CARGAS_LOGO_DATA_URL;
-      this.memoryAppLogo = nextVal;
-      if (logoDataUrl) {
-        localStorage.setItem(STORAGE_KEY_APP_LOGO, logoDataUrl);
-        this.enqueueIdbWrite(async () => {
-          await StationDb.setMeta(META_KEY_APP_LOGO, logoDataUrl);
-        });
-        if (isDevEnvironment() && !options?.skipSourceSync) {
-          void this.saveLogoToSourceCode(logoDataUrl, 'app');
-        }
-      } else {
-        localStorage.removeItem(STORAGE_KEY_APP_LOGO);
-        this.enqueueIdbWrite(async () => {
-          await StationDb.setMeta(META_KEY_APP_LOGO, nextVal);
-        });
-        if (isDevEnvironment() && !options?.skipSourceSync) {
-          void this.saveLogoToSourceCode('', 'app');
-        }
-      }
-      dispatchSafe(APP_LOGO_CHANGED_EVENT, nextVal);
-    } catch (e) {
-      console.error('Failed to save app logo', e);
-    }
+    this.saveAppLogoSlot(1, logoDataUrl, { activate: true, skipSourceSync: options?.skipSourceSync });
   }
 
   static onAppLogoUpdated(callback: (logoUrl: string | null) => void): () => void {
@@ -972,9 +1311,9 @@ export const BAKED_COMPANY_LOGOS: Record<string, string> = ${JSON.stringify(map,
   static async commitAllEditsToSourceCode(): Promise<{ success: boolean; count: number; message: string }> {
     const stations = this.getStations();
     const stationsRes = await this.saveStationsToSourceCode(stations);
-    const appLogo = this.getAppLogo();
+    const { logo1, logo2, activeSlot } = this.getAppLogoSlots();
     const stationLogo = this.getStationLogo();
-    await this.saveLogoToSourceCode(appLogo === DEFAULT_CARGAS_LOGO_DATA_URL ? '' : appLogo, 'app');
+    await this.saveAppLogosToSourceCode(logo1, logo2, activeSlot);
     await this.saveLogoToSourceCode(stationLogo === DEFAULT_CARGAS_LOGO_DATA_URL ? '' : stationLogo, 'station');
     await this.saveCompanyLogosToSourceCode();
     await AppConfigService.saveConfigToSourceCode();
@@ -1067,8 +1406,8 @@ export const DEFAULT_CARGAS_STATIONS = DEFAULT_STATIONS;
 
   // Generates complete TypeScript source code for cargasLogo.ts to commit directly to GitHub / Vercel
   static generateLogoSourceCode(): string {
-    const appLogo = this.getAppLogo();
+    const { logo1, logo2, activeSlot } = this.getAppLogoSlots();
     const stationLogo = this.getStationLogo();
-    return generateLogoSourceCode(appLogo, stationLogo);
+    return generateLogoSourceCode(logo1, stationLogo, logo2, activeSlot);
   }
 }

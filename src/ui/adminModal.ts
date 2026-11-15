@@ -123,6 +123,7 @@ export class AdminModalComponent {
   private recentlyAddedId: string | null = null;
   private addDraft: AddStationDraft = createEmptyAddDraft();
   private cleanupAuthViewportListener: (() => void) | null = null;
+  private modalOpenedAt = 0;
 
   constructor(
     container: HTMLElement,
@@ -140,11 +141,27 @@ export class AdminModalComponent {
     this.onPreviewSplashCallback = handlers.onPreviewSplash;
   }
 
+  private ensureTopLayerMount(): void {
+    if (typeof document !== 'undefined' && document.body) {
+      if (this.container.parentElement !== document.body || this.container !== document.body.lastElementChild) {
+        document.body.appendChild(this.container);
+      }
+    }
+    this.container.style.position = 'fixed';
+    this.container.style.inset = '0';
+    this.container.style.width = '100%';
+    this.container.style.height = '100%';
+    this.container.style.zIndex = '2147483000';
+    this.container.style.pointerEvents = 'auto';
+  }
+
   show(preferredTab?: 'upload' | 'manage' | 'add' | 'branding' | 'settings' | 'source'): void {
     this.stations = StationStorage.getStations();
     if (preferredTab) {
       this.currentTab = preferredTab;
     }
+    this.modalOpenedAt = performance.now();
+    this.ensureTopLayerMount();
     this.container.classList.remove('hidden');
     if (!this.isAuthenticated) {
       this.renderPasswordPrompt();
@@ -158,6 +175,8 @@ export class AdminModalComponent {
     this.stations = StationStorage.getStations();
     this.editingStation = { ...station };
     this.currentTab = 'manage';
+    this.modalOpenedAt = performance.now();
+    this.ensureTopLayerMount();
     this.container.classList.remove('hidden');
     this.renderDashboard();
   }
@@ -167,12 +186,15 @@ export class AdminModalComponent {
     this.cleanupAuthViewportListener = null;
     this.container.classList.add('hidden');
     this.container.innerHTML = '';
+    this.container.style.pointerEvents = '';
   }
 
-  // Password verification modal for secret 0000 password
+  // Password verification modal for secret password (always topmost & centered on mobile viewports)
   private renderPasswordPrompt(): void {
     this.cleanupAuthViewportListener?.();
     this.cleanupAuthViewportListener = null;
+    this.modalOpenedAt = performance.now();
+    this.ensureTopLayerMount();
 
     const configuredPwd = normalizePasswordDigits(
       AppConfigService.getConfig().adminPassword || DEFAULT_APP_CONFIG.adminPassword
@@ -181,8 +203,8 @@ export class AdminModalComponent {
 
     this.container.classList.remove('hidden');
     this.container.innerHTML = `
-      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[9999] overflow-y-auto overscroll-contain flex items-center justify-center p-4" style="height: var(--vvh, 100dvh);">
-        <div class="glass-card w-full max-w-sm rounded-3xl p-6 shadow-2xl border text-center my-auto animate-fade-in" id="auth-box">
+      <div id="admin-auth-backdrop" class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[2147483000] overflow-y-auto overscroll-contain flex items-center justify-center p-4 touch-manipulation" style="position: fixed; inset: 0; width: 100%; height: 100%; z-index: 2147483000; display: flex; align-items: center; justify-content: center;">
+        <div class="glass-card w-full max-w-sm rounded-3xl p-5 sm:p-6 shadow-2xl border text-center my-auto mx-auto animate-fade-in touch-manipulation" id="auth-box" style="max-width: min(360px, calc(100vw - 24px)); width: 100%;">
           
           <div class="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-400 mx-auto flex items-center justify-center text-2xl mb-4 border border-amber-500/30">
             🔒
@@ -210,12 +232,12 @@ export class AdminModalComponent {
                   placeholder="أدخل كلمة المرور" 
                   maxlength="32"
                   autocomplete="off"
-                  class="w-full text-center tracking-widest text-xl font-bold bg-slate-900 border border-slate-700 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 rounded-2xl py-3 px-10 text-white outline-none font-sans"
+                  class="w-full text-center tracking-widest text-xl font-bold bg-slate-900 border border-slate-700 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/30 rounded-2xl py-3 px-10 text-white outline-none font-sans touch-manipulation"
                 />
                 <button
                   type="button"
                   id="btn-toggle-auth-pwd"
-                  class="absolute left-2.5 p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors text-sm"
+                  class="absolute left-2.5 p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors text-sm touch-manipulation"
                   title="إظهار / إخفاء كلمة المرور"
                 >
                   👁️
@@ -229,14 +251,15 @@ export class AdminModalComponent {
             <div class="flex items-center gap-2">
               <button 
                 type="submit" 
-                class="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-emerald-900/30"
+                id="btn-submit-auth"
+                class="flex-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold py-2.5 rounded-xl text-sm transition-all shadow-lg shadow-emerald-900/30 touch-manipulation"
               >
                 دخول
               </button>
               <button 
                 type="button" 
                 id="btn-cancel-auth"
-                class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm transition-all"
+                class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm transition-all touch-manipulation"
               >
                 إلغاء
               </button>
@@ -249,32 +272,47 @@ export class AdminModalComponent {
 
     const input = this.container.querySelector('#admin-password-input') as HTMLInputElement | null;
     const authBox = this.container.querySelector('#auth-box') as HTMLElement | null;
+    const authBackdrop = this.container.querySelector('#admin-auth-backdrop') as HTMLElement | null;
 
-    const scrollAuthIntoView = () => {
-      if (!input) return;
-      try {
-        input.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-        authBox?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-      } catch {
-        input.scrollIntoView();
+    const syncAuthBackdropToViewport = () => {
+      if (!authBackdrop) return;
+      const vv = window.visualViewport;
+      if (vv && vv.height > 0 && vv.width > 0) {
+        authBackdrop.style.top = `${Math.round(vv.offsetTop)}px`;
+        authBackdrop.style.left = `${Math.round(vv.offsetLeft)}px`;
+        authBackdrop.style.right = 'auto';
+        authBackdrop.style.bottom = 'auto';
+        authBackdrop.style.width = `${Math.round(vv.width)}px`;
+        authBackdrop.style.height = `${Math.round(vv.height)}px`;
+      } else {
+        authBackdrop.style.inset = '0';
+        authBackdrop.style.width = '100%';
+        authBackdrop.style.height = '100dvh';
       }
     };
 
     const focusPasswordField = () => {
       if (!input) return;
-      input.focus({ preventScroll: false });
-      scrollAuthIntoView();
+      try {
+        input.focus({ preventScroll: true });
+      } catch {
+        input.focus();
+      }
+      syncAuthBackdropToViewport();
     };
 
-    // Synchronous focus + RAF + post-keyboard timers for Android/iOS WebView reliability
+    syncAuthBackdropToViewport();
     focusPasswordField();
-    requestAnimationFrame(focusPasswordField);
-    const focusTimerA = setTimeout(scrollAuthIntoView, 120);
-    const focusTimerB = setTimeout(scrollAuthIntoView, 340);
+    requestAnimationFrame(() => {
+      syncAuthBackdropToViewport();
+      focusPasswordField();
+    });
+    const focusTimerA = setTimeout(syncAuthBackdropToViewport, 120);
+    const focusTimerB = setTimeout(syncAuthBackdropToViewport, 340);
 
     input?.addEventListener('focus', () => {
-      scrollAuthIntoView();
-      setTimeout(scrollAuthIntoView, 220);
+      syncAuthBackdropToViewport();
+      setTimeout(syncAuthBackdropToViewport, 220);
     });
 
     this.container.querySelector('#auth-password-tap-zone')?.addEventListener('click', (e) => {
@@ -283,16 +321,18 @@ export class AdminModalComponent {
       focusPasswordField();
     });
 
-    const onViewportResize = () => {
-      if (document.activeElement === input || this.container.contains(document.activeElement)) {
-        scrollAuthIntoView();
-      }
+    const onViewportChange = () => {
+      syncAuthBackdropToViewport();
     };
-    window.visualViewport?.addEventListener('resize', onViewportResize);
+    window.visualViewport?.addEventListener('resize', onViewportChange);
+    window.visualViewport?.addEventListener('scroll', onViewportChange);
+    window.addEventListener('resize', onViewportChange);
     this.cleanupAuthViewportListener = () => {
       clearTimeout(focusTimerA);
       clearTimeout(focusTimerB);
-      window.visualViewport?.removeEventListener('resize', onViewportResize);
+      window.visualViewport?.removeEventListener('resize', onViewportChange);
+      window.visualViewport?.removeEventListener('scroll', onViewportChange);
+      window.removeEventListener('resize', onViewportChange);
     };
 
     this.container.querySelector('#btn-toggle-auth-pwd')?.addEventListener('click', () => {
@@ -304,9 +344,7 @@ export class AdminModalComponent {
       focusPasswordField();
     });
 
-    const form = this.container.querySelector('#admin-auth-form');
-    form?.addEventListener('submit', (e) => {
-      e.preventDefault();
+    const submitAuth = () => {
       const val = normalizePasswordDigits(input?.value || '');
       const configured = normalizePasswordDigits(
         AppConfigService.getConfig().adminPassword || DEFAULT_APP_CONFIG.adminPassword
@@ -336,13 +374,30 @@ export class AdminModalComponent {
           focusPasswordField();
         }
       }
+    };
+
+    const form = this.container.querySelector('#admin-auth-form');
+    form?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitAuth();
     });
 
     this.container.querySelector('#btn-cancel-auth')?.addEventListener('click', () => {
       this.hide();
     });
-    this.container.querySelector('.modal-backdrop')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) this.hide();
+
+    // Guard backdrop against closing on synthetic follow-up clicks right after the 5th tap opens the modal
+    const backdrop = this.container.querySelector('.modal-backdrop') as HTMLElement | null;
+    let backdropPointerDown = false;
+    backdrop?.addEventListener('pointerdown', (e) => {
+      backdropPointerDown = e.target === backdrop;
+    });
+    backdrop?.addEventListener('click', (e) => {
+      if (e.target !== e.currentTarget) return;
+      if (performance.now() - this.modalOpenedAt < 700) return;
+      if (!backdropPointerDown) return;
+      backdropPointerDown = false;
+      this.hide();
     });
   }
 
@@ -350,10 +405,11 @@ export class AdminModalComponent {
   private renderDashboard(): void {
     this.cleanupAuthViewportListener?.();
     this.cleanupAuthViewportListener = null;
+    this.ensureTopLayerMount();
     this.stations = StationStorage.getStations();
 
     this.container.innerHTML = `
-      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[9999] flex items-center justify-center p-2 sm:p-4">
+      <div class="modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-md z-[2147483000] flex items-center justify-center p-2 sm:p-4">
         <div class="glass-card w-full max-w-4xl h-[92vh] rounded-3xl flex flex-col shadow-2xl border overflow-hidden animate-scale-up">
           
           <!-- Top Header -->
@@ -1331,9 +1387,9 @@ export class AdminModalComponent {
     `;
   }
 
-  // Tab 4: Branding and Dual Logo upload (App Logo vs Station Pins Logo)
+  // Tab 4: Branding and Dual Logo upload (App Logo 1 & 2 vs Station Pins Logo)
   private renderBrandingTab(): string {
-    const appLogo = StationStorage.getAppLogo();
+    const { logo1, logo2, activeSlot } = StationStorage.getAppLogoSlots();
     const stationLogo = StationStorage.getStationLogo();
     const cfg = AppConfigService.getConfig();
 
@@ -1341,62 +1397,109 @@ export class AdminModalComponent {
       <div class="max-w-2xl mx-auto space-y-6 text-right">
         <div>
           <h4 class="text-base font-bold text-white mb-1">
-            تخصيص شعار التطبيق وشعار دبابيس المحطات
+            تخصيص شعاري التطبيق وشعار دبابيس المحطات
           </h4>
           <p class="text-xs text-slate-400">
-            بناءً على طلبك: يمكنك تحديد شعار خاص للتطبيق (يظهر بالشريط العلوي) وشعار مستقل تماماً لدبابيس المحطات على الخريطة وبطاقات المحطة، وحفظهما في الكود المصدري.
+            يمكنك رفع شعارين مختلفين للتطبيق والتبديل بينهما بنقرة واحدة، مع حفظ كلاهما واختيارك المفعّل في الكود المصدري ليعمل تلقائياً على اللاب توب والموبايل دون إعادة رفع.
           </p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
           
-          <!-- 1. App Logo Card -->
-          <div class="p-4 rounded-3xl bg-slate-900/60 border border-emerald-500/30 flex flex-col items-center justify-between gap-4 text-center">
+          <!-- 1. Dual App Logos Card (Slot 1 & Slot 2) -->
+          <div class="p-4 rounded-3xl bg-slate-900/60 border border-emerald-500/30 flex flex-col justify-between gap-3.5 text-center">
             <div class="w-full text-right border-b border-white/10 pb-2">
-              <div class="text-xs font-black text-emerald-400 flex items-center gap-1.5">
-                <span>📱</span>
-                <span>1. شعار التطبيق (Header & Brand)</span>
+              <div class="text-xs font-black text-emerald-400 flex items-center justify-between gap-1.5">
+                <span class="flex items-center gap-1.5"><span>📱</span><span>1. شعارا التطبيق (التبديل والحفظ)</span></span>
+                <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  المفعّل: الشعار ${activeSlot === 2 ? 'الثاني' : 'الأول'}
+                </span>
               </div>
-              <p class="text-[10px] text-slate-400 mt-0.5">يظهر في الشريط العلوي وواجهة التطبيق الرئيسية</p>
+              <p class="text-[10px] text-slate-400 mt-0.5">يُحفظ الشعاران معاً في الكود المصدري للتبديل الفوري بينهما في أي جهاز</p>
             </div>
 
-            <!-- Preview -->
-            <div class="w-24 h-24 rounded-2xl bg-slate-950 border-2 border-emerald-500/50 p-2 flex items-center justify-center shadow-inner relative group">
-              <img src="${appLogo}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo" class="max-w-full max-h-full object-contain drop-shadow" />
-            </div>
+            <div class="grid grid-cols-2 gap-2.5 w-full">
+              <!-- Slot 1 -->
+              <div class="p-2.5 rounded-2xl border ${activeSlot === 1 ? 'bg-emerald-950/35 border-emerald-400 shadow-lg shadow-emerald-950/40' : 'bg-slate-950/60 border-white/10'} flex flex-col items-center justify-between gap-2">
+                <div class="w-full flex items-center justify-between gap-1 text-[10px] font-black">
+                  <span class="text-slate-200">الشعار الأول</span>
+                  ${
+                    activeSlot === 1
+                      ? '<span class="px-1.5 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-400/40">✓ مفعّل</span>'
+                      : '<span class="text-slate-500">محفوظ</span>'
+                  }
+                </div>
+                <div class="w-16 h-16 rounded-xl bg-slate-950 border ${activeSlot === 1 ? 'border-emerald-400/70' : 'border-white/15'} p-1.5 flex items-center justify-center">
+                  <img src="${logo1}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo 1" class="max-w-full max-h-full object-contain drop-shadow" />
+                </div>
+                <input type="file" id="app-logo-file-input" accept="image/*" class="hidden" />
+                <div class="w-full space-y-1.5">
+                  ${
+                    activeSlot !== 1
+                      ? `<button id="btn-activate-app-logo-1" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-2 rounded-lg text-[10px] transition-all">✓ اختيار وتفعيل</button>`
+                      : `<div class="w-full py-1 px-2 rounded-lg bg-emerald-500/15 text-emerald-300 font-bold text-[10px]">الشعار النشط حالياً</div>`
+                  }
+                  <div class="flex items-center gap-1">
+                    <button id="btn-trigger-app-logo-upload" class="flex-1 bg-slate-800 hover:bg-slate-700 text-white border border-white/15 font-bold py-1 px-2 rounded-lg text-[10px] transition-all">
+                      📤 تغيير
+                    </button>
+                    <button id="btn-remove-app-logo" class="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 px-2 py-1 rounded-lg text-[10px] font-bold transition-all" title="استعادة الشعار الافتراضي">
+                      ↺
+                    </button>
+                  </div>
+                </div>
+              </div>
 
-            <div class="text-[11px] font-bold text-slate-300">
-              شعار التطبيق الحالي
-            </div>
-
-            <!-- Upload & Actions -->
-            <div class="w-full space-y-2">
-              <input type="file" id="app-logo-file-input" accept="image/*" class="hidden" />
-              <button 
-                id="btn-trigger-app-logo-upload"
-                class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 px-3 rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-1.5"
-              >
-                <span>📤</span>
-                <span>رفع وتغيير شعار التطبيق</span>
-              </button>
-
-              <div class="flex items-center gap-2">
-                <button 
-                  id="btn-save-app-logo-source"
-                  class="flex-1 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/30 py-1.5 rounded-xl text-[11px] font-bold transition-all"
-                  title="تثبيت شعار التطبيق مباشرة في ملف الكود المصدري src/assets/cargasLogo.ts"
-                >
-                  💾 حفظ في الكود المصدري
-                </button>
-                <button 
-                  id="btn-remove-app-logo"
-                  class="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all"
-                  title="استعادة الشعار الافتراضي"
-                >
-                  استعادة
-                </button>
+              <!-- Slot 2 -->
+              <div class="p-2.5 rounded-2xl border ${activeSlot === 2 ? 'bg-emerald-950/35 border-emerald-400 shadow-lg shadow-emerald-950/40' : 'bg-slate-950/60 border-white/10'} flex flex-col items-center justify-between gap-2">
+                <div class="w-full flex items-center justify-between gap-1 text-[10px] font-black">
+                  <span class="text-slate-200">الشعار الثاني</span>
+                  ${
+                    activeSlot === 2
+                      ? '<span class="px-1.5 py-0.5 rounded-full bg-emerald-500/25 text-emerald-300 border border-emerald-400/40">✓ مفعّل</span>'
+                      : logo2
+                        ? '<span class="text-cyan-300">محفوظ</span>'
+                        : '<span class="text-slate-500">فارغ</span>'
+                  }
+                </div>
+                <div class="w-16 h-16 rounded-xl bg-slate-950 border ${activeSlot === 2 ? 'border-emerald-400/70' : 'border-dashed border-white/20'} p-1.5 flex items-center justify-center">
+                  ${
+                    logo2
+                      ? `<img src="${logo2}" onerror="this.onerror=null;this.src='${DEFAULT_CARGAS_LOGO_DATA_URL}';" alt="App Logo 2" class="max-w-full max-h-full object-contain drop-shadow" />`
+                      : `<span class="text-[10px] text-slate-500 font-bold leading-tight">شعار إضافي</span>`
+                  }
+                </div>
+                <input type="file" id="app-logo-2-file-input" accept="image/*" class="hidden" />
+                <div class="w-full space-y-1.5">
+                  ${
+                    logo2
+                      ? activeSlot !== 2
+                        ? `<button id="btn-activate-app-logo-2" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-2 rounded-lg text-[10px] transition-all">✓ اختيار وتفعيل</button>`
+                        : `<div class="w-full py-1 px-2 rounded-lg bg-emerald-500/15 text-emerald-300 font-bold text-[10px]">الشعار النشط حالياً</div>`
+                      : `<div class="w-full py-1 px-2 rounded-lg bg-slate-800/70 text-slate-400 font-bold text-[10px]">ارفع الشعار الثاني</div>`
+                  }
+                  <div class="flex items-center gap-1">
+                    <button id="btn-trigger-app-logo-2-upload" class="flex-1 bg-teal-600 hover:bg-teal-500 text-white font-bold py-1 px-2 rounded-lg text-[10px] transition-all">
+                      📤 ${logo2 ? 'تغيير' : 'رفع شعار 2'}
+                    </button>
+                    ${
+                      logo2
+                        ? `<button id="btn-remove-app-logo-2" class="bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 px-2 py-1 rounded-lg text-[10px] font-bold transition-all" title="حذف الشعار الثاني">🗑️</button>`
+                        : ''
+                    }
+                  </div>
+                </div>
               </div>
             </div>
+
+            <!-- Save Both Slots + Active Selection to Source Code -->
+            <button 
+              id="btn-save-app-logo-source"
+              class="w-full bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-emerald-500/35 py-2 px-3 rounded-xl text-[11px] font-bold transition-all"
+              title="تثبيت كلا الشعارين والشعار المفعّل مباشرة في الكود المصدري src/assets/cargasLogo.ts"
+            >
+              💾 حفظ الشعارين والاختيار في الكود المصدري
+            </button>
           </div>
 
           <!-- 2. Station Pin Logo Card -->
@@ -2906,52 +3009,116 @@ export class AdminModalComponent {
       this.renderDashboard();
     });
 
-    // Tab 4 Events: Dual Branding (App Logo vs Station Pin Logo)
-    // 1. App Logo
+    // Tab 4 Events: Dual Selectable App Logos (Slot 1 & Slot 2) vs Station Pin Logo
+    // 1A. App Logo Slot 1
     const triggerAppLogoBtn = this.container.querySelector('#btn-trigger-app-logo-upload');
-    const appLogoFileInput = this.container.querySelector('#app-logo-file-input') as HTMLInputElement;
+    const appLogoFileInput = this.container.querySelector('#app-logo-file-input') as HTMLInputElement | null;
 
     triggerAppLogoBtn?.addEventListener('click', () => appLogoFileInput?.click());
-    appLogoFileInput?.addEventListener('change', (e) => {
+    appLogoFileInput?.addEventListener('change', async (e) => {
       const file = (e.target as HTMLInputElement).files?.[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const dataUrl = reader.result as string;
-          StationStorage.saveAppLogo(dataUrl, { skipSourceSync: true });
-          SoundService.playChime('start');
-          const res = await StationStorage.saveLogoToSourceCode(dataUrl, 'app');
-          if (res.success) {
-            ToastService.show('✅ تم تحديث وتثبيت شعار التطبيق في الكود المصدري (src/assets/cargasLogo.ts) بنجاح!', 'success');
-          } else {
-            ToastService.show('تم تحديث شعار التطبيق بنجاح!', 'success');
-          }
-          this.onDataChangedCallback();
-          this.renderDashboard();
-        };
-        reader.readAsDataURL(file);
+      if (!file) return;
+      try {
+        const dataUrl = await readImageAsOptimizedDataUrl(file, 320);
+        StationStorage.saveAppLogoSlot(1, dataUrl, { activate: true, skipSourceSync: true });
+        SoundService.playChime('start');
+        const res = await StationStorage.saveAppLogosToSourceCode();
+        if (res.success) {
+          ToastService.show('✅ تم حفظ الشعار الأول وتثبيت الشعارين في الكود المصدري بنجاح!', 'success');
+        } else {
+          ToastService.show('تم تحديث وتفعيل الشعار الأول للتطبيق بنجاح!', 'success');
+        }
+        this.onDataChangedCallback();
+        this.renderDashboard();
+      } catch {
+        ToastService.show('تعذر قراءة ملف الشعار الأول.', 'error');
+      } finally {
+        appLogoFileInput.value = '';
       }
+    });
+
+    this.container.querySelector('#btn-activate-app-logo-1')?.addEventListener('click', async () => {
+      StationStorage.setActiveAppLogoSlot(1, { skipSourceSync: true });
+      SoundService.playChime('start');
+      const res = await StationStorage.saveAppLogosToSourceCode();
+      ToastService.show(
+        res.success
+          ? '✅ تم تفعيل الشعار الأول وحفظ الاختيار في الكود المصدري!'
+          : '✅ تم تفعيل الشعار الأول للتطبيق!',
+        'success'
+      );
+      this.onDataChangedCallback();
+      this.renderDashboard();
+    });
+
+    this.container.querySelector('#btn-remove-app-logo')?.addEventListener('click', async () => {
+      StationStorage.saveAppLogoSlot(1, null, { activate: true, skipSourceSync: true });
+      SoundService.playChime('turn');
+      await StationStorage.saveAppLogosToSourceCode();
+      ToastService.show('تمت استعادة الشعار الأول الافتراضي.', 'info');
+      this.onDataChangedCallback();
+      this.renderDashboard();
+    });
+
+    // 1B. App Logo Slot 2 (Alternate App Logo)
+    const triggerAppLogo2Btn = this.container.querySelector('#btn-trigger-app-logo-2-upload');
+    const appLogo2FileInput = this.container.querySelector('#app-logo-2-file-input') as HTMLInputElement | null;
+
+    triggerAppLogo2Btn?.addEventListener('click', () => appLogo2FileInput?.click());
+    appLogo2FileInput?.addEventListener('change', async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const dataUrl = await readImageAsOptimizedDataUrl(file, 320);
+        StationStorage.saveAppLogoSlot(2, dataUrl, { activate: true, skipSourceSync: true });
+        SoundService.playChime('start');
+        const res = await StationStorage.saveAppLogosToSourceCode();
+        if (res.success) {
+          ToastService.show('✅ تم رفع الشعار الثاني وحفظ كلا الشعارين في الكود المصدري بنجاح!', 'success');
+        } else {
+          ToastService.show('تم رفع وتفعيل الشعار الثاني للتطبيق بنجاح!', 'success');
+        }
+        this.onDataChangedCallback();
+        this.renderDashboard();
+      } catch {
+        ToastService.show('تعذر قراءة ملف الشعار الثاني.', 'error');
+      } finally {
+        appLogo2FileInput.value = '';
+      }
+    });
+
+    this.container.querySelector('#btn-activate-app-logo-2')?.addEventListener('click', async () => {
+      StationStorage.setActiveAppLogoSlot(2, { skipSourceSync: true });
+      SoundService.playChime('start');
+      const res = await StationStorage.saveAppLogosToSourceCode();
+      ToastService.show(
+        res.success
+          ? '✅ تم تفعيل الشعار الثاني وحفظ الاختيار في الكود المصدري!'
+          : '✅ تم تفعيل الشعار الثاني للتطبيق!',
+        'success'
+      );
+      this.onDataChangedCallback();
+      this.renderDashboard();
+    });
+
+    this.container.querySelector('#btn-remove-app-logo-2')?.addEventListener('click', async () => {
+      StationStorage.saveAppLogoSlot(2, null, { activate: false, skipSourceSync: true });
+      SoundService.playChime('turn');
+      await StationStorage.saveAppLogosToSourceCode();
+      ToastService.show('تم حذف الشعار الثاني وتفعيل الشعار الأول.', 'info');
+      this.onDataChangedCallback();
+      this.renderDashboard();
     });
 
     this.container.querySelector('#btn-save-app-logo-source')?.addEventListener('click', async () => {
       SoundService.playChime('click');
-      const current = StationStorage.getAppLogo();
-      const res = await StationStorage.saveLogoToSourceCode(current, 'app');
+      const res = await StationStorage.saveAppLogosToSourceCode();
       if (res.success) {
         SoundService.playChime('start');
-        ToastService.show('✅ تم تثبيت شعار التطبيق في الكود المصدري (src/assets/cargasLogo.ts) بنجاح!', 'success');
+        ToastService.show('✅ تم حفظ كلا شعاري التطبيق والاختيار المفعّل في الكود المصدري بنجاح!', 'success');
       } else {
         ToastService.show(res.message, 'info');
       }
-    });
-
-    this.container.querySelector('#btn-remove-app-logo')?.addEventListener('click', async () => {
-      StationStorage.saveAppLogo(null, { skipSourceSync: true });
-      SoundService.playChime('turn');
-      await StationStorage.saveLogoToSourceCode('', 'app');
-      ToastService.show('تمت استعادة شعار التطبيق الافتراضي.', 'info');
-      this.onDataChangedCallback();
-      this.renderDashboard();
     });
 
     // 2. Station Pin Logo
